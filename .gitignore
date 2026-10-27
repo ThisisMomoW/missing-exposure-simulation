@@ -1,0 +1,16 @@
+renv/library/
+renv/cache/
+renv/bootstrap/
+renv/staging/
+renv/local/
+renv/lock/
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+.vscode/
+.DS_Store
+outputs/*
+!outputs/.gitkeep
+*.log
+renv/setup-complete

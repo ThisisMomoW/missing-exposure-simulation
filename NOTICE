@@ -1,0 +1,9 @@
+Project and report author: Mo Wang.
+
+R/trme_rd.R adapts Yuliang Shi's trme estimating equations to the marginal risk-difference scale. The implementation includes bootstrap validity checks and inverse-weight shrinkage. Yuliang Shi's authorship and methodological references are credited in that file.
+
+Upstream trme: https://github.com/yuliang-shi/trme, licensed under GPL-3.0. The corresponding license text is included in dependencies/GPL-3.txt. The exact upstream revision for this adaptation is not established; its redistribution obligations require review.
+
+External packages are dependencies, not bundled package code. Their licenses and versions appear in renv.lock. Software citations are provided in dependencies/software_citations.txt.
+
+A project-wide license for Mo Wang's code has not been selected. The author must choose a license compatible with the TR code before granting public reuse rights. This notice does not grant additional rights or change existing licenses.

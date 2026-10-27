@@ -1,0 +1,1085 @@
+---
+title: "Simulation Study of Causal Estimators with a Missing Binary Exposure"
+subtitle: "Simulation Results Report"
+author: "Mo Wang"
+date: "October 04, 2026"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+    theme: readable
+header-includes:
+  - \usepackage{float}
+  - \usepackage[section]{placeins}
+params:
+  project_root: "."
+  results_dir: "outputs/simulation/Results"
+  table_n: 1000
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 5.8,
+  out.width = "95%",
+  fig.pos = "H"
+)
+
+required_packages <- c("dplyr", "tidyr", "ggplot2", "knitr")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, quietly = TRUE,
+          FUN.VALUE = logical(1))
+]
+
+if (length(missing_packages) > 0L) {
+  stop(
+    "Install the following packages before knitting: ",
+    paste(missing_packages, collapse = ", ")
+  )
+}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+
+project_root <- normalizePath(
+  params$project_root,
+  winslash = "/",
+  mustWork = TRUE
+)
+
+results_dir <- file.path(project_root, params$results_dir)
+result_settings <- readRDS(file.path(results_dir, "settings.rds"))
+mice_rf_trees <- result_settings$mice_rf_trees
+if (length(mice_rf_trees) != 1L || is.na(mice_rf_trees) || mice_rf_trees < 1L) {
+  stop("Result settings must identify the RF-MICE tree count.")
+}
+
+method_labels <- c(
+  full_aipw = "Full-data AIPW",
+  cc_aipw = "Complete-case AIPW",
+  single_imp_aipw = "Single-imputation + AIPW",
+  mice_aipw = "MICE + AIPW",
+  drcmd = "drcmd",
+  tr_aipw = "TR-AIPW"
+)
+
+method_order <- names(method_labels)
+
+nuisance_labels <- c(
+  main = "Main effects",
+  interaction = "With interaction",
+  rf = "Random forest"
+)
+
+read_oc <- function(name) {
+  path <- file.path(
+    results_dir,
+    paste0(name, "_operating_characteristics.csv")
+  )
+  if (!file.exists(path)) {
+    stop("Cannot find operating-characteristic file: ", path)
+  }
+  read.csv(path, stringsAsFactors = FALSE)
+}
+
+add_labels <- function(dat) {
+  dat |>
+    mutate(
+      Method = factor(
+        unname(method_labels[method]),
+        levels = unname(method_labels[method_order])
+      ),
+      `Nuisance model` = factor(
+        unname(nuisance_labels[nuisance_spec]),
+        levels = unname(nuisance_labels)
+      )
+    )
+}
+
+format_num <- function(x, digits = 3) {
+  ifelse(is.na(x), NA_character_, formatC(x, digits = digits, format = "f"))
+}
+
+extract_metric <- function(dat, method_name, spec, n_value, condition_name,
+                           condition_value, metric) {
+  z <- dat[
+    dat$method == method_name &
+      dat$nuisance_spec == spec &
+      dat$n == n_value &
+      dat[[condition_name]] == condition_value,
+    metric
+  ]
+  if (length(z) != 1L || is.na(z)) return(NA_real_)
+  as.numeric(z)
+}
+
+metric_range <- function(dat, method_name, spec, metric) {
+  z <- dat[
+    dat$method == method_name &
+      dat$nuisance_spec == spec,
+    metric
+  ]
+  range(as.numeric(z), na.rm = TRUE)
+}
+
+make_table <- function(dat, condition, n_value = params$table_n,
+                       specs = c("main"), methods = method_order) {
+  dat |>
+    filter(
+      n == n_value,
+      nuisance_spec %in% specs,
+      method %in% methods
+    ) |>
+    mutate(
+      Estimator = unname(method_labels[method]),
+      `Nuisance model` = unname(nuisance_labels[nuisance_spec]),
+      Bias = round(bias, 3),
+      `SE ratio` = round(se_ratio, 3),
+      RMSE = round(rmse, 3),
+      Coverage = round(coverage, 3)
+    ) |>
+    select(
+      all_of(condition),
+      Estimator,
+      `Nuisance model`,
+      Bias,
+      `SE ratio`,
+      RMSE,
+      Coverage
+    ) |>
+    arrange(.data[[condition]], Estimator, `Nuisance model`)
+}
+
+make_plot <- function(dat, x, y, ylab, xlab, refline = NULL) {
+  p <- add_labels(dat) |>
+    ggplot(
+      aes(
+        x = .data[[x]],
+        y = .data[[y]],
+        group = interaction(Method, `Nuisance model`),
+        color = Method,
+        linetype = `Nuisance model`
+      )
+    ) +
+    geom_line(linewidth = 0.65) +
+    geom_point(size = 1.6) +
+    facet_wrap(~ n, scales = "free_x") +
+    labs(
+      x = xlab,
+      y = ylab,
+      color = "Estimator",
+      linetype = "Nuisance model"
+    ) +
+    theme_bw(base_size = 10) +
+    theme(
+      legend.position = "right",
+      panel.grid.minor = element_blank()
+    )
+
+  if (!is.null(refline)) {
+    p <- p + geom_hline(
+      yintercept = refline,
+      linewidth = 0.4,
+      linetype = "dashed"
+    )
+  }
+
+  p
+}
+
+planned_cell_audit <- function(dat, scenario) {
+  data.frame(
+    Scenario = scenario,
+    planned_cells = nrow(dat),
+    present_cells = nrow(dat),
+    cells_with_at_least_one_valid_rep = sum(dat$n_finite > 0),
+    total_attempted_reps = sum(dat$n_total),
+    total_valid_reps = sum(dat$n_finite)
+  )
+}
+
+tr_validity <- function(dat, scenario, condition) {
+  dat |>
+    filter(method == "tr_aipw") |>
+    mutate(
+      Scenario = scenario,
+      Condition = paste0(condition, "=", .data[[condition]]),
+      `Valid %` = 100 * n_finite / n_total,
+      `Nuisance model` = ifelse(
+        nuisance_spec == "main",
+        "Main effects",
+        "With interaction"
+      )
+    ) |>
+    select(
+      Scenario, Condition, n, `Nuisance model`,
+      n_total, n_finite, `Valid %`, coverage
+    )
+}
+
+missing_share <- read_oc("missing_share")
+# Read outer-fold counts stored with the result rows; k=1 denotes no cross-fitting.
+drcmd_parametric_folds <- vapply(
+  c("missing_share", "gamma_y", "outcome_interaction", "missing_mechanism",
+    "outcome_interaction_mcar"),
+  function(name) {
+    x <- readRDS(file.path(results_dir, paste0(name, "_combined.rds")))$results
+    if (!"drcmd_k" %in% names(x)) return("1")
+    k <- x$drcmd_k[x$method == "drcmd" & x$nuisance_spec %in% c("main", "interaction")]
+    k[is.na(k)] <- 1L
+    paste(sort(unique(k)), collapse = "/")
+  }, character(1)
+)
+s6_drcmd_folds <- readRDS(file.path(results_dir, "settings.rds"))$s6_drcmd_folds
+gamma_y <- read_oc("gamma_y")
+outcome_interaction_all <- read_oc("outcome_interaction")
+outcome_interaction <- outcome_interaction_all |>
+  filter(nuisance_spec %in% names(nuisance_labels))
+missing_mechanism <- read_oc("missing_mechanism")
+outcome_interaction_mcar <- read_oc("outcome_interaction_mcar")
+
+reported_rf <- outcome_interaction |>
+  filter(nuisance_spec == "rf")
+
+if (
+  nrow(reported_rf) != 45L ||
+    any(reported_rf$n_total != 500L) ||
+    any(reported_rf$n_finite != 500L)
+) {
+  stop("The reported Scenario 3 RF results are incomplete.")
+}
+
+all_results <- bind_rows(
+  mutate(missing_share, scenario = "Varying missing share"),
+  mutate(gamma_y, scenario = "Varying outcome effect on missingness"),
+  mutate(outcome_interaction, scenario = "Outcome interaction under MAR"),
+  mutate(missing_mechanism, scenario = "MCAR versus MAR"),
+  mutate(outcome_interaction_mcar, scenario = "Outcome interaction under MCAR")
+)
+
+truth_by_gamma <- outcome_interaction |>
+  group_by(gamma_int) |>
+  summarise(
+    true_rd = mean(mean_estimate - bias, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+# Abstract
+
+**Result settings:** RF-MICE uses `r mice_rf_trees` trees in the results loaded for this report.
+
+This simulation study compares six approaches for estimating a marginal causal risk difference when a binary exposure is partially missing. The target estimand is
+
+\[
+\psi = E\{Y(1)\} - E\{Y(0)\}.
+\]
+
+Across the five simulation scenarios, Full-data AIPW has negligible bias and nearly nominal coverage and serves as the benchmark. Complete-case AIPW performs well under MCAR. Under MAR, its bias increases with the missing exposure proportion and the outcome coefficient in the missingness model.
+
+Single-imputation + AIPW often has small point estimation bias, but its estimated standard errors are underestimated and its confidence intervals undercover. MICE + AIPW generally has low bias when the nuisance models are adequately specified. When the true outcome model contains a treatment--covariate interaction, ignoring that interaction leads to significant bias, particularly under MAR.
+
+`drcmd` and TR-AIPW usually have small bias under MAR, but both can lose efficiency compared to full-data AIPW. TR-AIPW uses 99th percentile inverse weight shrinkage and percentile bootstrap confidence intervals. Some TR-AIPW replications fail the validity checks in small samples or at high missingness.
+
+In the interaction scenarios, adding the DGP-informed interaction reduces bias for several estimators. The reduction is larger under MAR than under MCAR.
+
+Scenario 3 includes random forest sensitivity analyses for Full-data AIPW, Complete-case AIPW, Single-imputation + AIPW, MICE + AIPW, and `drcmd`. Every reported RF cell contains 500 finite Monte Carlo estimates. SuperLearner forests use 500 trees; MICE exposure-imputation forests use `r mice_rf_trees` trees, with 10 imputations and 10 iterations. The RF-based AIPW analyses use the AIPW package’s default 10-fold cross-fitting, and the RF-based `drcmd` analysis uses 10-fold outer cross-fitting. The exposure imputation RF is fitted using the complete cases and applied to observations with missing exposure, without a separate outer cross-fitting step.
+
+# Simulation design
+
+## Data-generating process
+
+Three continuous baseline covariates are generated independently:
+
+\[
+X_1,X_2,X_3 \sim N(0,1).
+\]
+
+The binary exposure is generated from
+
+\[
+\operatorname{logit}\{P(A=1\mid X)\}
+=
+-0.2 + 0.9X_1 + 1.0X_2 + 0.8X_3.
+\]
+
+The binary outcome is generated from
+
+\[
+\operatorname{logit}\{P(Y=1\mid A,X)\}
+=
+0.7 + A + 0.5X_1 + 0.9X_2 + 0.7X_3
++ \gamma_{\mathrm{int}}A(X_1+X_2+X_3).
+\]
+
+Thus, \(\gamma_{\mathrm{int}}\) controls the degree of treatment--covariate interaction in the true outcome model.
+
+Let \(R=1\) indicate that the exposure is observed. Under MAR,
+
+\[
+\operatorname{logit}\{P(R=1\mid X,Y)\}
+=
+\gamma_0 + 0.6X_1 + 0.7X_2 + 0.8X_3 + \gamma_Y Y,
+\]
+
+where \(\gamma_0\) is calibrated numerically to obtain the desired missing exposure proportion. Under MCAR,
+
+\[
+\operatorname{logit}\{P(R=1)\}=\gamma_0.
+\]
+
+The target estimand is the marginal risk difference. Because the outcome model is logistic and may contain treatment effect heterogeneity, the true risk difference is calculated by Monte Carlo integration:
+
+\[
+\psi
+=
+E_X\left[
+P\{Y(1)=1\mid X\}
+-
+P\{Y(0)=1\mid X\}
+\right].
+\]
+
+For reference, the true marginal risk difference changes with \(\gamma_{\mathrm{int}}\):
+
+```{r true-rd-table}
+kable(
+  truth_by_gamma |>
+    mutate(
+      gamma_int = round(gamma_int, 3),
+      true_rd = round(true_rd, 4)
+    ),
+  col.names = c("Outcome interaction coefficient", "True marginal RD"),
+  caption = "True marginal risk difference across outcome-interaction settings."
+)
+```
+
+## Simulation scenarios
+
+Five scenario families were evaluated, with 500 Monte Carlo replications per design cell:
+
+1. **Varying missing share:** target missing proportions 0.2, 0.4, 0.5, and 0.6; \(n=500,1000,2000\); MAR with \(\gamma_Y=0.5\); no outcome interaction.
+2. **Varying outcome dependence in missingness:** \(\gamma_Y=0,0.5,0.8\); \(n=500,1000,2000\); target missing share 0.4; MAR; no outcome interaction. Note that \(\gamma_Y=0\) is still MAR because missingness continues to depend on \(X\).
+3. **Outcome interaction under MAR:** \(\gamma_{\mathrm{int}}=0,0.5,1\); \(n=500,1000,2000\); target missing share 0.4; MAR with \(\gamma_Y=0.5\).
+4. **MCAR versus MAR:** MCAR and MAR; \(n=500,1000,2000\); target missing share 0.4; no outcome interaction.
+5. **Outcome interaction under MCAR:** \(\gamma_{\mathrm{int}}=0,0.5,1\); \(n=500,1000,2000\); target missing share 0.4; MCAR.
+
+## Estimators
+
+Six estimators were compared:
+
+1. **Full-data AIPW:** benchmark using the fully observed simulated exposure.
+2. **Complete-case AIPW:** AIPW restricted to observations with observed exposure.
+3. **Single-imputation + AIPW:** stochastic single imputation of missing exposure followed by AIPW.
+4. **MICE + AIPW:** multiple imputation followed by AIPW and Rubin pooling.
+5. **drcmd:** a doubly robust estimator designed for missing exposure.
+6. **TR-AIPW:** an adaptation of Shi's `trme` estimating equation implementation, reporting the marginal risk difference rather than the marginal odds ratio.
+
+For the main-effects and interaction `drcmd` specifications, the outer-fold settings in Scenarios 1--5 are respectively `r paste(drcmd_parametric_folds, collapse = ", ")`. A value of 1 indicates no outer cross-fitting.
+
+For TR-AIPW, the intervention risks are estimated internally and the final contrast is
+
+\[
+\widehat{\psi}_{RD}
+=
+\widehat{\tau}_1-\widehat{\tau}_0,
+\]
+
+where \(\widehat{\tau}_a\) estimates \(E\{Y(a)\}\).
+
+## Nuisance model specifications
+
+Each estimator was evaluated under two nuisance model specifications.
+
+The **main-effects** outcome model uses
+
+\[
+Y \sim A + X_1 + X_2 + X_3.
+\]
+
+The **interaction** outcome model is DGP-informed and uses
+
+\[
+Y \sim A + X_1 + X_2 + X_3
++ A:I(X_1+X_2+X_3).
+\]
+
+The treatment propensity model remains a main-effects model because the exposure itself contains no treatment model interactions. The purpose of the two nuisance specifications is therefore to evaluate the effect of outcome model misspecification when the true outcome model contains treatment--covariate interaction.
+
+Scenario 3 additionally contains a Random Forest sensitivity analysis. For Full-data and Complete-case AIPW, RF is used for the outcome nuisance \(Q(A,X)\), while \(g(X)\) remains a GLM. For Single-imputation + AIPW and MICE + AIPW, RF is also used to model the missing exposure conditional on the observed variables.
+
+For `drcmd`, the RF specification uses RF for both the outcome regression \(m\) and the pseudo outcome regression, while the treatment and missingness nuisance models remain GLMs. It uses 500 trees and 10-fold outer cross fitting. Each of the nine `drcmd` RF cells contains 500 finite Monte Carlo estimates.
+
+## Trimming, shrinkage, and confidence intervals
+
+For AIPW based analyses, estimated treatment propensity scores are bounded at 0.025 and 0.975 when the estimand and influence curve standard error are calculated. `drcmd` uses the corresponding 0.025 cutoff in its implementation.
+
+TR-AIPW uses a different stabilization mechanism. In the current analysis, inverse treatment and missingness weights are shrunk at the empirical 99th percentile:
+
+\[
+w_i^{*}=\min\{w_i,Q_{0.99}(w)\}.
+\]
+
+The same `shrink_rate = 0.99` is used for the point estimate and every bootstrap resample.
+
+TR-AIPW inference uses \(B=100\) bootstrap resamples. A bootstrap is treated as valid only when the estimated intervention risks satisfy
+
+\[
+0\leq\widehat{\tau}_0\leq1,\qquad
+0\leq\widehat{\tau}_1\leq1,
+\]
+
+and consequently
+
+\[
+-1\leq\widehat{\tau}_1-\widehat{\tau}_0\leq1.
+\]
+
+At least 80 of 100 bootstrap resamples must be valid for inference to be reported. The TR-AIPW 95% confidence interval is the percentile bootstrap interval,
+
+\[
+\left[
+Q_{0.025}(\widehat{\psi}^{*}),
+Q_{0.975}(\widehat{\psi}^{*})
+\right].
+\]
+
+For descriptive comparison with Monte Carlo variability, the reported TR-AIPW standard error is still the standard deviation of the valid bootstrap estimates. Therefore, for TR-AIPW, the SE ratio and confidence interval coverage are not linked through a Wald interval.
+
+## Monte Carlo performance measures
+
+For each estimator and simulation cell, the operating characteristic tables report **Bias, SE ratio, RMSE, and Coverage**.
+
+\[
+\text{Bias}
+=
+E(\widehat{\psi})-\psi,
+\]
+
+\[
+\text{Monte Carlo SD}
+=
+\sqrt{\operatorname{Var}(\widehat{\psi})},
+\]
+
+\[
+\text{RMSE}
+=
+\sqrt{
+E\left[(\widehat{\psi}-\psi)^2\right]
+},
+\]
+
+
+# Simulation completion and valid replications
+
+All planned operating characteristic cells are present in the result files.
+
+```{r completion-audit}
+audit_table <- bind_rows(
+  planned_cell_audit(missing_share, "Varying missing share"),
+  planned_cell_audit(gamma_y, "Varying outcome effect on missingness"),
+  planned_cell_audit(outcome_interaction, "Outcome interaction under MAR"),
+  planned_cell_audit(missing_mechanism, "MCAR versus MAR"),
+  planned_cell_audit(outcome_interaction_mcar, "Outcome interaction under MCAR")
+) %>%
+  dplyr::select(
+    -dplyr::any_of(c(
+      "planed_cell",
+      "planned_cells",
+      "cell_with_at_lease",
+      "cells_with_at_least_one_valid_rep"
+    ))
+  )
+
+knitr::kable(
+  audit_table,
+  caption = "Computational completion and total valid Monte Carlo replications."
+)
+```
+
+For methods other than TR-AIPW, all reported operating characteristic cells contain 500 finite Monte Carlo estimates. TR-AIPW has fewer valid replications in some small sample and high missingness settings. A replication is excluded when the point estimate is invalid or fewer than 80 of 100 bootstrap estimates satisfy the validity criteria. This rule determines whether inference is reported.
+
+Failures are most frequent when exposure missingness is high and the sample is small. At target missing share 0.6 and \(n=500\), the interaction specification has `r extract_metric(missing_share, "tr_aipw", "interaction", 500, "target_missing_share", 0.6, "n_finite")` valid replications out of 500. The main-effects specification has `r extract_metric(missing_share, "tr_aipw", "main", 500, "target_missing_share", 0.6, "n_finite")`. Coverage in these rows is conditional on the replications that passed the validity checks.
+
+# Results
+
+## Scenario 1: Varying proportion of missing exposure
+
+Under MAR, complete-case AIPW becomes more biased as the missing exposure proportion increases. At \(n=1000\), its main-effects bias changes from `r format_num(extract_metric(missing_share, "cc_aipw", "main", 1000, "target_missing_share", 0.2, "bias"))` at 20% missingness to `r format_num(extract_metric(missing_share, "cc_aipw", "main", 1000, "target_missing_share", 0.6, "bias"))` at 60% missingness, while coverage falls from `r format_num(extract_metric(missing_share, "cc_aipw", "main", 1000, "target_missing_share", 0.2, "coverage"))` to `r format_num(extract_metric(missing_share, "cc_aipw", "main", 1000, "target_missing_share", 0.6, "coverage"))`.
+
+Single-imputation + AIPW remains much less biased than complete-case analysis but noticeably underestimates uncertainty. At 60% missingness and \(n=1000\), the main-effects SE ratio is `r format_num(extract_metric(missing_share, "single_imp_aipw", "main", 1000, "target_missing_share", 0.6, "se_ratio"))`, with coverage `r format_num(extract_metric(missing_share, "single_imp_aipw", "main", 1000, "target_missing_share", 0.6, "coverage"))`.
+
+MICE + AIPW remains close to unbiased under the main-effects specification, with generally conservative coverage. `drcmd` and TR-AIPW also maintain relatively small bias, although uncertainty estimation is large in the most difficult small sample or high missingness cells. In particular, `drcmd` shows noticeable undercoverage at 60% missingness and \(n=500\), especially under the interaction nuisance specification.
+
+```{r missing-share-table}
+kable(
+  make_table(
+    missing_share,
+    condition = "target_missing_share",
+    n_value = params$table_n,
+    specs = "main"
+  ),
+  caption = paste0(
+    "Operating characteristics at n = ",
+    params$table_n,
+    " for the varying missing share scenario (main-effects nuisance specification)."
+  )
+)
+```
+
+```{r missing-share-bias, fig.cap="Bias as the target missing-exposure proportion varies under MAR."}
+make_plot(
+  missing_share,
+  x = "target_missing_share",
+  y = "bias",
+  ylab = "Bias",
+  xlab = "Target missing-exposure proportion",
+  refline = 0
+)
+```
+
+```{r missing-share-coverage, fig.cap="Empirical 95% confidence-interval coverage as the target missing-exposure proportion varies under MAR."}
+make_plot(
+  missing_share,
+  x = "target_missing_share",
+  y = "coverage",
+  ylab = "Empirical 95% CI coverage",
+  xlab = "Target missing-exposure proportion",
+  refline = 0.95
+)
+```
+
+
+
+## Scenario 2: Varying outcome dependence in the missingness model
+
+As \(\gamma_Y\) increases, complete-case AIPW becomes increasingly biased because missingness depends more on the observed outcome. At \(n=1000\), the main-effects complete-case bias is `r format_num(extract_metric(gamma_y, "cc_aipw", "main", 1000, "gamma_y", 0, "bias"))` when \(\gamma_Y=0\), `r format_num(extract_metric(gamma_y, "cc_aipw", "main", 1000, "gamma_y", 0.5, "bias"))` when \(\gamma_Y=0.5\), and `r format_num(extract_metric(gamma_y, "cc_aipw", "main", 1000, "gamma_y", 0.8, "bias"))` when \(\gamma_Y=0.8\).
+
+The \(\gamma_Y=0\) condition should not be interpreted as MCAR: the observation probability still depends on \(X_1,X_2,X_3\). Full-data AIPW remains approximately unbiased across all values of \(\gamma_Y\). MICE + AIPW also has small bias under the main-effects specification but tends to report standard errors larger than the Monte Carlo SD. Single imputation again shows undercoverage.
+
+`drcmd` and TR-AIPW remain close to unbiased, although their coverage is below nominal in several settings, especially for the more flexible interaction nuisance specification.
+
+```{r gamma-y-table}
+kable(
+  make_table(
+    gamma_y,
+    condition = "gamma_y",
+    n_value = params$table_n,
+    specs = "main"
+  ),
+  caption = paste0(
+    "Operating characteristics at n = ",
+    params$table_n,
+    " as outcome dependence in the missingness model varies (main-effects nuisance specification)."
+  )
+)
+```
+
+```{r gamma-y-bias, fig.cap="Bias as the outcome dependence in the MAR missingness model varies."}
+make_plot(
+  gamma_y,
+  x = "gamma_y",
+  y = "bias",
+  ylab = "Bias",
+  xlab = expression(gamma[Y]),
+  refline = 0
+)
+```
+
+```{r gamma-y-coverage, fig.cap="Empirical 95% confidence interval coverage as outcome dependence in the missingness model varies."}
+make_plot(
+  gamma_y,
+  x = "gamma_y",
+  y = "coverage",
+  ylab = "Empirical 95% CI coverage",
+  xlab = expression(gamma[Y]),
+  refline = 0.95
+)
+```
+
+
+
+## Scenario 3: Treatment--covariate interaction under MAR
+
+This scenario compares the main-effects specification, the DGP-informed interaction specification, and a random forest sensitivity analysis. RF results are available for Full-data AIPW, Complete-case AIPW, Single-imputation + AIPW, MICE + AIPW, and `drcmd`.
+
+For Single-imputation + AIPW and MICE + AIPW, RF is used in the exposure imputation model and the downstream AIPW outcome nuisance \(Q(A,X)\), while \(g(X)\) remains a GLM. 
+
+The `drcmd` RF analysis uses RF for both \(m\) and the pseudo outcome regression. It uses 500 trees and 10-fold outer cross fitting. All 500 replications are finite in each of the nine RF cells.
+
+Across the nine `drcmd` RF cells, coverage ranges from `r paste(format_num(metric_range(outcome_interaction, "drcmd", "rf", "coverage")), collapse = " to ")`. Variance inflation compared to Full-data AIPW ranges from `r paste(format_num(metric_range(outcome_interaction, "drcmd", "rf", "variance_inflation")), collapse = " to ")`. At \(n=1000,\gamma_{\mathrm{int}}=1\), bias is `r format_num(extract_metric(outcome_interaction, "drcmd", "rf", 1000, "gamma_int", 1, "bias"))`, the SE ratio is `r format_num(extract_metric(outcome_interaction, "drcmd", "rf", 1000, "gamma_int", 1, "se_ratio"))`, and coverage is `r format_num(extract_metric(outcome_interaction, "drcmd", "rf", 1000, "gamma_int", 1, "coverage"))`. Its Monte Carlo SD is `r format_num(extract_metric(outcome_interaction, "drcmd", "rf", 1000, "gamma_int", 1, "mc_sd"))`, compared with `r format_num(extract_metric(outcome_interaction, "full_aipw", "rf", 1000, "gamma_int", 1, "mc_sd"))` for Full-data AIPW.
+
+The Single-imputation + AIPW RF omits between-imputation variability, so its standard errors remain too small. MICE + AIPW has better standard error calibration, but positive bias remains when the treatment--covariate interaction is strong. TR-AIPW has no RF implementation in this study and is reported only for the main-effects and DGP-informed interaction specifications.
+
+```{r outcome-interaction-table}
+interaction_methods <- c(
+  "full_aipw", "cc_aipw", "single_imp_aipw",
+  "mice_aipw", "drcmd", "tr_aipw"
+)
+
+kable(
+  make_table(
+    outcome_interaction,
+    condition = "gamma_int",
+    n_value = params$table_n,
+    specs = c("main", "interaction", "rf"),
+    methods = interaction_methods
+  ),
+  caption = paste0(
+    "Operating characteristics at n = ",
+    params$table_n,
+    " as treatment--covariate interaction strength varies under MAR. ",
+    "All reported RF cells contain 500 finite Monte Carlo estimates."
+  )
+)
+```
+
+```{r outcome-interaction-bias, fig.cap="Bias as treatment--covariate interaction strength varies under MAR."}
+make_plot(
+  outcome_interaction,
+  x = "gamma_int",
+  y = "bias",
+  ylab = "Bias",
+  xlab = expression(gamma[int]),
+  refline = 0
+)
+```
+
+```{r outcome-interaction-rmse, fig.cap="RMSE as treatment--covariate interaction strength varies under MAR."}
+make_plot(
+  outcome_interaction,
+  x = "gamma_int",
+  y = "rmse",
+  ylab = "RMSE",
+  xlab = expression(gamma[int])
+)
+```
+
+```{r outcome-interaction-coverage, fig.cap="Empirical 95% confidence-interval coverage as treatment--covariate interaction strength varies under MAR."}
+make_plot(
+  outcome_interaction,
+  x = "gamma_int",
+  y = "coverage",
+  ylab = "Empirical 95% CI coverage",
+  xlab = expression(gamma[int]),
+  refline = 0.95
+)
+```
+
+## Scenario 4: MCAR versus MAR
+
+The direct comparison between MCAR and MAR confirms that complete case bias is driven by informative missingness rather than the missing exposure proportion alone.
+
+At \(n=1000\), the main-effects complete-case bias is `r format_num(extract_metric(missing_mechanism, "cc_aipw", "main", 1000, "missing_mechanism", "MCAR", "bias"))` under MCAR and `r format_num(extract_metric(missing_mechanism, "cc_aipw", "main", 1000, "missing_mechanism", "MAR", "bias"))` under MAR. The corresponding coverage is `r format_num(extract_metric(missing_mechanism, "cc_aipw", "main", 1000, "missing_mechanism", "MCAR", "coverage"))` and `r format_num(extract_metric(missing_mechanism, "cc_aipw", "main", 1000, "missing_mechanism", "MAR", "coverage"))`, respectively.
+
+Under MCAR, complete-case AIPW, `drcmd`, MICE + AIPW, and TR-AIPW all have relatively small bias. Under MAR, methods that explicitly address the exposure missingness process generally perform better than complete-case analysis. Single imputation continues to underestimate uncertainty under both mechanisms.
+
+```{r missing-mechanism-table}
+kable(
+  make_table(
+    missing_mechanism,
+    condition = "missing_mechanism",
+    n_value = params$table_n,
+    specs = "main"
+  ),
+  caption = paste0(
+    "Operating characteristics at n = ",
+    params$table_n,
+    " under MCAR and MAR (main-effects nuisance specification)."
+  )
+)
+```
+
+```{r missing-mechanism-bias, fig.cap="Bias under MCAR and MAR."}
+make_plot(
+  missing_mechanism,
+  x = "missing_mechanism",
+  y = "bias",
+  ylab = "Bias",
+  xlab = "Missingness mechanism",
+  refline = 0
+)
+```
+
+```{r missing-mechanism-coverage, fig.cap="Empirical 95% confidence-interval coverage under MCAR and MAR."}
+make_plot(
+  missing_mechanism,
+  x = "missing_mechanism",
+  y = "coverage",
+  ylab = "Empirical 95% CI coverage",
+  xlab = "Missingness mechanism",
+  refline = 0.95
+)
+```
+
+
+
+## Scenario 5: Treatment--covariate interaction under MCAR
+
+Under MCAR, omitting the treatment--covariate interaction has less effect on bias than under MAR. Complete-case AIPW remains approximately unbiased because exposure observation is independent of the analysis variables.
+
+At \(\gamma_{\mathrm{int}}=1,n=1000\), MICE + AIPW bias is `r format_num(extract_metric(outcome_interaction_mcar, "mice_aipw", "main", 1000, "gamma_int", 1, "bias"))` with main effects and `r format_num(extract_metric(outcome_interaction_mcar, "mice_aipw", "interaction", 1000, "gamma_int", 1, "bias"))` with the interaction specification. TR-AIPW remains close to unbiased under both specifications.
+
+Single-imputation + AIPW still undercovers despite relatively small point estimation bias. Its standard errors do not include uncertainty from the imputed exposure.
+
+```{r outcome-interaction-mcar-table}
+kable(
+  make_table(
+    outcome_interaction_mcar,
+    condition = "gamma_int",
+    n_value = params$table_n,
+    specs = c("main", "interaction")
+  ),
+  caption = paste0(
+    "Operating characteristics at n = ",
+    params$table_n,
+    " as treatment--covariate interaction strength varies under MCAR."
+  )
+)
+```
+
+```{r outcome-interaction-mcar-bias, fig.cap="Bias as treatment--covariate interaction strength varies under MCAR."}
+make_plot(
+  outcome_interaction_mcar,
+  x = "gamma_int",
+  y = "bias",
+  ylab = "Bias",
+  xlab = expression(gamma[int]),
+  refline = 0
+)
+```
+
+```{r outcome-interaction-mcar-coverage, fig.cap="Empirical 95% confidence-interval coverage as treatment--covariate interaction strength varies under MCAR."}
+make_plot(
+  outcome_interaction_mcar,
+  x = "gamma_int",
+  y = "coverage",
+  ylab = "Empirical 95% CI coverage",
+  xlab = expression(gamma[int]),
+  refline = 0.95
+)
+```
+
+
+
+# Interpretation across scenarios
+
+## Bias and point estimation
+
+Full data AIPW is the benchmark because it uses the exposure values before missingness is imposed. It remains close to unbiased and usually has the smallest Monte Carlo variability. Its performance shows that the main difficulties in the other analyses arise from missing exposure and the methods used to address it rather than from the underlying treatment and outcome models alone.
+
+Complete case AIPW performs well under MCAR because exposure observation is independent of the analysis variables. Under MAR, the complete cases are selected according to covariates and the observed outcome. This selection produces bias that increases as the missing exposure proportion or the outcome coefficient in the missingness model increases. A larger sample does not remove this bias. Instead, the confidence intervals become narrower around a biased estimate, so coverage can decrease as \(n\) increases.
+
+MICE + AIPW has small bias in most settings when the nuisance model includes the required outcome structure. Under MAR with a true treatment by covariate interaction, the main effects specification causes systematic bias. Adding the DGP informed interaction reduces this bias. The corresponding difference is smaller under MCAR, where misspecification of the outcome model does not combine with outcome dependent exposure missingness.
+
+Single imputation + AIPW often has less bias than complete case AIPW under MAR. However, its uncertainty is underestimated. Thus, the improvement in point estimation does not indicate reliable interval estimation. This is consistent with treating imputed exposure values as observed in the subsequent AIPW analysis.
+
+`drcmd` and TR-AIPW have relatively small bias in many MAR settings, including several settings with outcome interaction. Their point estimation performance is less stable when the sample is small or the missing exposure proportion is high. These methods also tend to have greater Monte Carlo variability than Full data AIPW.
+
+## Standard errors, coverage, and efficiency
+
+For Single imputation + AIPW, the mean estimated standard error is consistently smaller than the Monte Carlo SD. This explains its low coverage even when bias is modest. Increasing the sample size reduces sampling variability but does not correct a variance estimator that omits imputation uncertainty. Multiple imputation performs better because Rubin pooling includes both within imputation and between imputation variability.
+
+MICE + AIPW sometimes has a mean estimated standard error larger than the Monte Carlo SD, leading to conservative coverage. Under strong outcome interaction, better standard error calibration does not remove bias caused by an inadequate nuisance model. Coverage can therefore remain below 0.95 even when the SE ratio is close to or above one.
+
+The full random forest `drcmd` analysis illustrates the difference between coverage and variance inflation. Across its nine random forest cells, coverage ranges from `r paste(format_num(metric_range(outcome_interaction, "drcmd", "rf", "coverage")), collapse = " to ")`, but variance inflation compared with Full data AIPW ranges from `r paste(format_num(metric_range(outcome_interaction, "drcmd", "rf", "variance_inflation")), collapse = " to ")`. The confidence intervals can have acceptable coverage while remaining much wider than those from the full data benchmark.
+
+TR-AIPW uses percentile bootstrap confidence intervals rather than Wald intervals. Its reported SE ratio is based on the standard deviation of valid bootstrap estimates, so the SE ratio and coverage need not move together in the same way as they do for the AIPW methods. Coverage should therefore be interpreted together with the number of valid Monte Carlo replications. TR-AIPW did not return valid results in all Monte Carlo replications. Its reported bias and coverage therefore describe performance among the valid replications only. Even if coverage among these replications is close to 95%, this does not establish reliable performance across all simulated datasets, because unsuccessful replications are excluded from the calculation.
+
+
+## Missingness mechanism and nuisance model specification
+
+The MCAR and MAR comparisons separate the effect of the missing exposure proportion from the effect of informative missingness. Complete case analysis is adequate under MCAR but noticeably biased under MAR. Methods that model the exposure observation process or the distribution of the missing exposure reduce this selection bias, although their performance still depends on nuisance model specification and weight stability.
+
+The interaction results show that flexible nuisance models do not automatically improve every estimator. The DGP informed interaction specification reduces bias when the true outcome model contains the corresponding interaction. When the interaction is absent, the additional term can increase variability without reducing bias. Random forest provides a less restrictive alternative, but it does not uniformly dominate the parametric specifications. Single imputation still undercovers, MICE retains positive bias under strong interaction, and random forest `drcmd` remains less efficient than Full data AIPW.
+
+## Numerical stability of TR-AIPW
+
+A TR-AIPW replication is valid only when both estimated intervention risks lie between zero and one and the resulting risk difference lies between minus one and one. At least 80 of the 100 bootstrap estimates must also satisfy these conditions. Failures are concentrated in the smaller sample and higher missingness settings, where extreme treatment and missingness weights create finite sample instability.
+
+The validity criteria identify unstable fits but do not cause the instability. Bias, RMSE, and coverage are calculated only among valid replications. A cell with acceptable conditional coverage can still be unreliable if many replications fail. The valid replication percentage should therefore be reported with the usual operating characteristics.
+
+## Overall comparison
+
+No estimator performs best on every criterion. Complete case AIPW is suitable under MCAR but is not reliable under MAR. Single imputation + AIPW can reduce bias but does not provide reliable confidence intervals because it omits imputation uncertainty. MICE + AIPW provides the most consistent combination of low bias and reasonable coverage when the nuisance model is adequate. `drcmd` and TR-AIPW often control bias under MAR, but this comes with lower efficiency or numerical instability in difficult settings. Correct nuisance model specification remains important when the outcome contains treatment by covariate interaction.
+
+# Additional analysis: Scenario 6, nonlinear covariates with a binary outcome
+
+The above design, results, and interpretation describe Scenarios 1--5. This additional analysis uses a separate binary outcome data generating process with Kang--Schafer transformed covariates. Its results are evaluated separately from the continuous-outcome experiment and from the treatment--covariate interaction in Scenario 3.
+
+## Data-generating process and estimand
+
+Let \(Z_1,Z_2,Z_3\) be independent standard normal variables. The fitted estimators use only the transformed covariates
+
+\[
+X_1=\exp(Z_1/2),\qquad
+X_2=\frac{Z_2}{1+\exp(Z_1)}+10,\qquad
+X_3=\left(\frac{Z_1Z_3}{25}+0.6\right)^3.
+\]
+
+The binary exposure and outcome are generated from
+
+\[
+\operatorname{logit}P(A=1\mid Z)=0.3-0.8Z_1+0.8Z_2-0.25Z_3,
+\]
+
+\[
+\operatorname{logit}P(Y=1\mid A,Z)
+=1+2A+0.5Z_1+Z_2+0.5Z_3+\gamma_{\mathrm{int}}Z_1Z_2.
+\]
+
+Here, \(\gamma_{\mathrm{int}}\) controls a **covariate--covariate interaction**, rather than a treatment--covariate interaction. This is a binary adaptation using the transformed covariates, rather than the continuous-outcome Kang--Schafer experiment.
+
+With \(R=1\) denoting observed exposure, missingness is generated from
+
+\[
+\operatorname{logit}P(R=1\mid Z,Y)
+=\alpha+0.5Z_1-0.5Z_2+0.25Z_3+0.5Y.
+\]
+
+The intercept is calibrated using 200,000 simulated observations to target 40% missing exposure. The transformation preserves the latent covariate information, so missingness remains MAR given the observed transformed covariates and outcome. The experiment crosses \(n=500,1000,2000\) with \(\gamma_{\mathrm{int}}=0,0.5,1\), with 500 planned Monte Carlo replications per design cell. The true marginal risk difference is computed by averaging the difference between the two conditional outcome probabilities over 2,000,000 draws. The values stored with the results, rather than the treatment log-odds coefficient, are used in all performance calculations.
+
+## Estimators and nuisance specifications
+
+The estimators excluding TR-AIPW each have separate GLM and RF specifications. For Full-data AIPW and Complete-case AIPW, these specifications change the outcome nuisance model; the treatment propensity model remains a GLM. Full-data AIPW observes the complete exposure but still fits models using transformed covariates, so it is a complete-data benchmark rather than an oracle with correctly specified latent-variable models.
+
+Single-imputation + AIPW uses RF for exposure imputation under both outcome specifications. MICE + AIPW also uses RF exposure imputation, with **10 imputed data sets, 10 iterations and `r mice_rf_trees` trees per imputation forest**. The downstream AIPW outcome model is fitted separately with GLM and RF. MICE pools estimates using Rubin's rules, with normal 95% confidence intervals in this binary implementation.
+
+For `drcmd`, both the outcome learner and the pseudo outcome learner are GLMs in the GLM specification, and both are RFs in the RF specification. The treatment and missingness learners remain GLMs, with `r s6_drcmd_folds`-fold outer cross fitting. AIPW uses a propensity bound of 0.025, and `drcmd` uses a cutoff of 0.025.
+
+TR-AIPW uses a separate **GLM main-effects** analysis using the same simulated binary data. There is no RF TR-AIPW arm. It uses 99th percentile inverse-weight shrinkage in both the point estimate and bootstrap, rather than the AIPW 0.025 bound. It requests 100 bootstrap resamples, requires at least 80 valid bootstrap estimates, and reports a percentile 95% interval. Its reported SE is the SD of valid bootstrap estimates.
+
+## Result completeness and validity
+
+```{r s6-read-and-audit, include=FALSE}
+# Use separate objects for the nonlinear binary scenario.
+s6_dir <- file.path(results_dir, "nonlinear_binary")
+s6_chunk_files <- c(
+  list.files(file.path(s6_dir, "chunks_mice50"),
+             pattern = "^scenario_.*[.]rds$", full.names = TRUE),
+  list.files(file.path(s6_dir, "chunks_tr_aipw"),
+             pattern = "^scenario_.*[.]rds$", full.names = TRUE)
+)
+s6_read_one <- function(path) {
+  tryCatch(readRDS(path), error = function(e) {
+    stop("Cannot read Scenario 6 result: ", path, "\n", conditionMessage(e))
+  })
+}
+# Use chunks when present: do not mix a merged file with its source rows.
+# A complete merged export is also supported when chunks are not distributed.
+if (length(s6_chunk_files)) {
+  s6_raw <- bind_rows(lapply(s6_chunk_files, s6_read_one))
+} else {
+  s6_merged <- file.path(s6_dir, "combined_with_tr_aipw", "all_results.rds")
+  s6_csv <- file.path(s6_dir, "combined_with_tr_aipw", "all_results.csv")
+  if (file.exists(s6_merged)) {
+    s6_raw <- s6_read_one(s6_merged)
+  } else if (file.exists(s6_csv)) {
+    s6_raw <- read.csv(s6_csv, stringsAsFactors = FALSE)
+  } else {
+    stop("No binary Scenario 6 chunks or combined_with_tr_aipw results in: ", s6_dir)
+  }
+}
+s6_required <- c("scenario_id", "sim", "method", "nuisance_spec", "n",
+                 "gamma_int", "true_rd", "estimate", "se", "ci_lower",
+                 "ci_upper", "status", "error")
+if (!all(s6_required %in% names(s6_raw))) {
+  stop("Missing Scenario 6 columns: ",
+       paste(setdiff(s6_required, names(s6_raw)), collapse = ", "))
+}
+s6_design <- expand.grid(n = c(500L, 1000L, 2000L),
+                         gamma_int = c(0, 0.5, 1))
+s6_design$scenario_id <- seq_len(nrow(s6_design))
+s6_arms <- bind_rows(
+  expand.grid(method = c("full_aipw", "cc_aipw", "single_imp_aipw",
+                         "mice_aipw", "drcmd"),
+              nuisance_spec = c("glm", "rf"), stringsAsFactors = FALSE),
+  data.frame(method = "tr_aipw", nuisance_spec = "glm")
+)
+s6_expected <- merge(merge(s6_design, s6_arms, by = NULL),
+                     data.frame(sim = seq_len(500L)), by = NULL)
+s6_keys <- c("scenario_id", "method", "nuisance_spec", "sim")
+if (anyDuplicated(s6_raw[s6_keys])) stop("Duplicate Scenario 6 replication keys.")
+if (nrow(anti_join(s6_raw, s6_expected,
+                  by = c(s6_keys, "n", "gamma_int")))) {
+  stop("Unexpected Scenario 6 replication keys or design metadata.")
+}
+if (any(!is.finite(s6_raw$true_rd)) || any(abs(s6_raw$true_rd) > 1)) {
+  stop("Invalid binary risk-difference truth in Scenario 6.")
+}
+s6_truth_check <- s6_raw |>
+  group_by(gamma_int) |>
+  summarise(n_truth = n_distinct(true_rd), .groups = "drop")
+if (any(s6_truth_check$n_truth != 1L)) stop("Inconsistent Scenario 6 truth.")
+s6_raw <- s6_raw |>
+  mutate(s6_valid = !is.na(status) & status == "ok" &
+           is.finite(estimate) & is.finite(se) & se >= 0 &
+           is.finite(ci_lower) & is.finite(ci_upper) & ci_lower <= ci_upper)
+s6_missing <- anti_join(s6_expected, s6_raw, by = s6_keys)
+s6_counts <- s6_raw |>
+  group_by(scenario_id, method, nuisance_spec) |>
+  summarise(n_present = n(), n_valid = sum(s6_valid),
+            n_invalid = sum(!s6_valid), .groups = "drop")
+s6_cells <- merge(s6_design, s6_arms, by = NULL) |>
+  left_join(s6_counts, by = c("scenario_id", "method", "nuisance_spec")) |>
+  mutate(across(c(n_present, n_valid, n_invalid), ~ coalesce(.x, 0L)),
+         n_missing = 500L - n_present)
+s6_oc <- s6_raw |>
+  filter(s6_valid) |>
+  group_by(scenario_id, method, nuisance_spec) |>
+  summarise(true_rd = first(true_rd), mean_estimate = mean(estimate),
+            bias = mean(estimate - true_rd), mc_sd = sd(estimate),
+            mean_se = mean(se), rmse = sqrt(mean((estimate - true_rd)^2)),
+            coverage = mean(ci_lower <= true_rd & true_rd <= ci_upper),
+            .groups = "drop") |>
+  right_join(s6_cells, by = c("scenario_id", "method", "nuisance_spec")) |>
+  mutate(se_ratio = ifelse(mc_sd > 0, mean_se / mc_sd, NA_real_))
+s6_metric <- function(method, spec, gamma, metric, n_value = 1000) {
+  keep <- s6_oc$method == method &
+    s6_oc$nuisance_spec == spec &
+    s6_oc$n == n_value &
+    s6_oc$gamma_int == gamma
+  z <- s6_oc[[metric]][keep]
+  if (length(z) != 1L || is.na(z)) return(NA_real_)
+  as.numeric(z)
+}
+s6_metric_range <- function(method, spec, metric) {
+  keep <- s6_oc$method == method & s6_oc$nuisance_spec == spec
+  z <- s6_oc[[metric]][keep]
+  range(as.numeric(z), na.rm = TRUE)
+}
+s6_plot <- function(metric, label, refline = NULL) {
+  dat <- s6_oc |>
+    mutate(Method = factor(unname(method_labels[method]),
+                            levels = unname(method_labels)),
+           Specification = factor(nuisance_spec, levels = c("glm", "rf"),
+                                  labels = c("GLM", "RF")))
+  p <- ggplot(dat, aes(gamma_int, .data[[metric]], color = Method,
+                       group = Method)) +
+    geom_line(linewidth = 0.65) + geom_point(size = 1.5) +
+    facet_grid(Specification ~ n) +
+    scale_x_continuous(breaks = c(0, 0.5, 1)) +
+    labs(x = expression(gamma[int]), y = label, color = "Estimator") +
+    theme_bw(base_size = 10) +
+    theme(legend.position = "bottom", panel.grid.minor = element_blank())
+  if (!is.null(refline)) p <- p + geom_hline(yintercept = refline,
+                                           linetype = "dashed", linewidth = 0.4)
+  p
+}
+```
+
+The expected total is 49,500 replication records: nine design cells, ten non-TR method combinations and one TR-AIPW combination, each with 500 replications. The supplied data contain **`r format(nrow(s6_raw), big.mark = ',')` records**, with **`r nrow(s6_missing)` missing records** and **`r sum(!s6_raw$s6_valid)` recorded failures or invalid results**. Operating characteristics below use only valid results; missing records are not counted as successful or failed attempts.
+
+```{r s6-completion-table}
+s6_completion <- s6_cells |>
+  group_by(n, gamma_int) |>
+  summarise(Present = sum(n_present), Valid = sum(n_valid),
+            `Failed / invalid` = sum(n_invalid), Missing = sum(n_missing),
+            .groups = "drop")
+kable(s6_completion, caption = "Scenario 6 completeness; 5,500 records are expected per design cell.")
+```
+
+```{r s6-incomplete-cells, results='asis'}
+if (nrow(s6_missing)) {
+  cat("The following cells remain incomplete; their results are provisional.\n\n")
+  s6_missing_table <- s6_missing |>
+    group_by(n, gamma_int, method, nuisance_spec) |>
+    summarise(Missing = n(),
+              `Missing simulation IDs` = paste(sort(sim), collapse = ", "),
+              .groups = "drop")
+  # Compact consecutive IDs without implying gaps are present.
+  s6_missing_table$`Missing simulation IDs` <- vapply(
+    strsplit(s6_missing_table$`Missing simulation IDs`, ", "), function(x) {
+      v <- as.integer(x)
+      if (length(v) > 1L && all(diff(v) == 1L)) {
+        paste0(min(v), "--", max(v))
+      } else paste(v, collapse = ", ")
+    }, character(1))
+  print(kable(s6_missing_table, caption = "Missing Scenario 6 replications."))
+} else {
+  cat("All planned Scenario 6 replication records are present.\n\n")
+}
+```
+
+```{r s6-failure-table, results='asis'}
+if (any(!s6_raw$s6_valid)) {
+  s6_failures <- s6_raw |>
+    filter(!s6_valid) |>
+    mutate(Reason = ifelse(is.na(error) | error == "",
+                           "Invalid status or numerical output", error)) |>
+    count(n, gamma_int, method, nuisance_spec, Reason, name = "Replications")
+  print(kable(s6_failures, caption = "Recorded Scenario 6 failures and validity exclusions."))
+}
+```
+
+TR-AIPW has `r sum(s6_cells$n_valid[s6_cells$method == 'tr_aipw'])` valid replications among `r sum(s6_cells$n_present[s6_cells$method == 'tr_aipw'])` recorded attempts. Its coverage and other performance measures are conditional on validity, rather than treating failed bootstrap inference as successful coverage.
+
+## Operating characteristics
+
+```{r s6-truth-table}
+kable(s6_raw |> distinct(gamma_int, true_rd) |> arrange(gamma_int),
+      digits = 5, col.names = c("Covariate interaction coefficient", "True marginal RD"),
+      caption = "Scenario 6 binary marginal risk differences.")
+```
+
+The tables show valid replication counts along with Bias, SE ratio (mean estimated SE divided by Monte Carlo SD), RMSE, and Coverage. The GLM/RF label refers to the nuisance specifications described above; exposure imputation is RF in both imputation arms. TR-AIPW appears only in the GLM table and GLM panels.
+
+```{r s6-operating-tables, results='asis'}
+for (s6_spec in c("glm", "rf")) {
+  s6_tab <- s6_oc |>
+    filter(n == params$table_n, nuisance_spec == s6_spec) |>
+    mutate(Estimator = unname(method_labels[method])) |>
+    arrange(gamma_int, match(method, method_order)) |>
+    select(gamma_int, Estimator, Valid = n_valid, Missing = n_missing,
+           Bias = bias, `SE ratio` = se_ratio, RMSE = rmse, Coverage = coverage)
+  print(kable(s6_tab, digits = 3,
+              caption = paste0("Scenario 6: ", toupper(s6_spec),
+                               " specification at n = ", params$table_n, ".")))
+  cat("\n\n")
+}
+```
+
+```{r s6-bias, fig.height=7, fig.cap="Scenario 6 bias by sample size and covariate interaction strength."}
+s6_plot("bias", "Bias", 0)
+```
+
+```{r s6-rmse, fig.height=7, fig.cap="Scenario 6 RMSE among valid replications."}
+s6_plot("rmse", "RMSE")
+```
+
+```{r s6-coverage, fig.height=7, fig.cap="Scenario 6 empirical 95% confidence-interval coverage, conditional on valid results. The dashed line marks 0.95."}
+s6_plot("coverage", "Empirical 95% CI coverage", 0.95)
+```
+
+```{r s6-se-ratio, fig.height=7, fig.cap="Scenario 6 mean estimated SE divided by Monte Carlo SD. The dashed line marks one."}
+s6_plot("se_ratio", "SE ratio", 1)
+```
+
+## Interpretation of the binary nonlinear experiment
+
+Full-data AIPW does not eliminate nuisance-model misspecification caused by the transformed covariates. At \(n=1000,\gamma_{\mathrm{int}}=1\), its bias is `r format_num(s6_metric('full_aipw', 'glm', 1, 'bias'))` with GLM and `r format_num(s6_metric('full_aipw', 'rf', 1, 'bias'))` with RF. The corresponding RMSE values are `r format_num(s6_metric('full_aipw', 'glm', 1, 'rmse'))` and `r format_num(s6_metric('full_aipw', 'rf', 1, 'rmse'))`. RF improves this comparison, but it does not uniformly improve every method or design cell.
+
+Complete-case AIPW still has selection bias under MAR. At \(n=1000,\gamma_{\mathrm{int}}=0\), its GLM bias is `r format_num(s6_metric('cc_aipw', 'glm', 0, 'bias'))` and coverage is `r format_num(s6_metric('cc_aipw', 'glm', 0, 'coverage'))`. The smaller bias at some other interaction settings should not be interpreted as general validity of complete-case analysis under MAR.
+
+Single imputation continues to underestimate uncertainty. At \(n=1000,\gamma_{\mathrm{int}}=1\), its RF bias is `r format_num(s6_metric('single_imp_aipw', 'rf', 1, 'bias'))`, but the SE ratio is `r format_num(s6_metric('single_imp_aipw', 'rf', 1, 'se_ratio'))` and coverage is `r format_num(s6_metric('single_imp_aipw', 'rf', 1, 'coverage'))`. Small point-estimation bias therefore does not imply reliable confidence intervals.
+
+MICE includes between-imputation variability but has positive bias in the stronger interaction settings. At \(n=1000,\gamma_{\mathrm{int}}=1\), changing the outcome nuisance from GLM to RF reduces bias from `r format_num(s6_metric('mice_aipw', 'glm', 1, 'bias'))` to `r format_num(s6_metric('mice_aipw', 'rf', 1, 'bias'))` and RMSE from `r format_num(s6_metric('mice_aipw', 'glm', 1, 'rmse'))` to `r format_num(s6_metric('mice_aipw', 'rf', 1, 'rmse'))`. Coverage remains below nominal: `r format_num(s6_metric('mice_aipw', 'glm', 1, 'coverage'))` and `r format_num(s6_metric('mice_aipw', 'rf', 1, 'coverage'))`, respectively. Any incomplete MICE cell identified above remains temporal.
+
+For `drcmd` at \(n=1000,\gamma_{\mathrm{int}}=1\), RF reduces bias from `r format_num(s6_metric('drcmd', 'glm', 1, 'bias'))` to `r format_num(s6_metric('drcmd', 'rf', 1, 'bias'))`, but its RMSE is `r format_num(s6_metric('drcmd', 'rf', 1, 'rmse'))` compared with `r format_num(s6_metric('drcmd', 'glm', 1, 'rmse'))` for GLM. A more flexible nuisance model therefore need not provide a simultaneous benefit in bias, efficiency, and coverage.
+
+TR-AIPW conditional coverage across the nine cells ranges from `r paste(format_num(s6_metric_range('tr_aipw', 'glm', 'coverage')), collapse = ' to ')`. At \(n=1000,\gamma_{\mathrm{int}}=1\), its bias is `r format_num(s6_metric('tr_aipw', 'glm', 1, 'bias'))`, RMSE is `r format_num(s6_metric('tr_aipw', 'glm', 1, 'rmse'))`, and coverage is `r format_num(s6_metric('tr_aipw', 'glm', 1, 'coverage'))`. These results support evaluating TR-AIPW alongside the other missing-exposure estimators, while keeping its validity rate and bootstrap failures in the assessment. They do not establish uniformly nominal coverage across all cells.
+
+These comparisons concern the binary nonlinear experiment only. Conclusions for Scenarios 1–5 do not necessarily apply to the nonlinear binary design.
