@@ -48,3 +48,6 @@ method_grid <- function() {
     stringsAsFactors = FALSE
   )
 }
+
+# Manuscript cells: eta = 1. Cells 1–6 are additional interaction analyses.
+default_cells <- 7:9

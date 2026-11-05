@@ -1,66 +1,56 @@
 # Missing-exposure simulation
 
-Simulation study of estimators for the marginal causal risk difference, E[Y(1) − Y(0)], when a binary exposure is partly missing. A denotes exposure, Y the binary outcome, X three observed covariates, and R = 1 an observed exposure. The study examines bias, precision, interval coverage and fitting failures under missing completely at random (MCAR) and missing at random (MAR).
+Research code for estimating the marginal causal risk difference, E[Y(1) − Y(0)], when a binary exposure is partly missing. A is exposure, Y is the binary outcome, X contains three observed covariates, and R = 1 denotes an observed exposure.
 
-## Scenarios and estimators
+## Analyses and methods
 
-| Scenario argument | Variation |
-|---|---|
-| `missing_share` | Missing exposure proportions 0.2, 0.4, 0.5, 0.6; MAR |
-| `gamma_y` | Outcome coefficient in the observation model: 0, 0.5, 0.8 |
-| `outcome_interaction` | Treatment–covariate interaction: 0, 0.5, 1; MAR |
-| `missing_mechanism` | MCAR versus MAR |
-| `outcome_interaction_mcar` | Treatment–covariate interaction: 0, 0.5, 1; MCAR |
-| `nonlinear_binary` | Transformed covariates and latent covariate interactions |
+The six simulation families vary missing exposure share (`missing_share`), outcome dependence in observation (`gamma_y`), treatment–covariate interaction under MAR or MCAR (`outcome_interaction`, `outcome_interaction_mcar`), observation mechanism (`missing_mechanism`), and nonlinear covariates (`nonlinear_binary`). Each method/design cell has **500 replications** at n = 500, 1,000 or 2,000.
 
-The design uses sample sizes of 500, 1,000 and 2,000, with **500 Monte Carlo replications per cell**. Methods are full-data AIPW, complete-case AIPW, single-imputation AIPW, MICE AIPW, package `drcmd`, and TR-AIPW. Families 1–5 use main-effects and interaction models; `outcome_interaction` also includes random forests. `nonlinear_binary` uses GLM and RF specifications, with GLM only for TR-AIPW.
+The manuscript compares complete-data AIPW, complete-case AIPW, single-imputation AIPW, MICE AIPW, and **MR**, implemented by `drcmd::drcmd()` with code identifier `drcmd`. TR-AIPW (`tr_aipw`) is an additional analysis. The nonlinear manuscript cells use η = 1 (cells 7–9); η = 0 and 0.5 (cells 1–6) are available through `--cell` but are not included in the distributed dataset.
 
-AIPW and `drcmd` use 10 outer cross-fitting folds. MICE uses **10 imputations and 10 iterations**, with **500 trees** for RF imputation; SuperLearner forests use **500 trees**. MICE confidence intervals use Rubin t quantiles in all scenarios. TR-AIPW estimates uncertainty from **100 bootstrap resamples**, requiring at least 80 valid estimates. See [analysis settings and limitations](report/ANALYSIS_NOTES.md) for nuisance models, inference and summary definitions.
+In Scenario 6, GLM single imputation uses logistic probabilities followed by Bernoulli draws, and GLM MICE uses `logreg`. The RF branches use RF probabilities for single imputation and MICE `rf` with **500 trees**. Outcome regression follows the GLM/RF branch; treatment propensity uses main-effects logistic regression throughout. MICE uses **10 imputations, 10 iterations and Rubin t intervals**. AIPW and `drcmd` use **10 outer folds**. Scenario 3 RF-MICE also uses 500 trees. [Analysis notes](report/ANALYSIS_NOTES.md) specify internal CV, seeds, bootstrap inference and summary denominators.
 
-## Installation
+## Install and reproduce the figures
 
-Use R 4.4.3 and run from the project root:
+Use R 4.4.3 and run these commands from the repository root:
 
 ```sh
 Rscript scripts/setup.R
+Rscript scripts/aggregate.R bundled
+Rscript scripts/manuscript_figures.R bundled
 ```
 
-This restores the project library from `renv.lock`, including AIPW, SuperLearner, drcmd, mice, ranger and rootSolve. Installation requires network access and may require compilers. HTML reports need Pandoc; PDF reports also need LaTeX. See [environment details](dependencies/ENVIRONMENT.md).
+Setup restores the project library from `renv.lock`. See [system requirements and package sources](dependencies/ENVIRONMENT.md). The included `report/inputs/simulation/` records support all three manuscript comparisons without fitting models. Outputs in `outputs/bundled/manuscript_figures/` include PDF/PNG figures and the numerical summaries for each figure, with attempted and valid counts. The nonlinear figure uses η = 1, MAR, 40% missing exposure and all three sample sizes.
+
+For the broader simulation report and its figures:
+
+```sh
+Rscript scripts/figures.R bundled
+Rscript scripts/render.R html bundled
+```
+
+HTML requires Pandoc; replace `html` with `pdf` if LaTeX is installed.
 
 ## Run simulations
 
-A short execution check uses two replications with the full model settings. It does not assess statistical performance.
+Run one scenario family, then summarize it:
 
 ```sh
-Rscript scripts/run.R scenario missing_share --cell=1 --rep=1,2 --run=check
+Rscript scripts/run.R scenario nonlinear_binary --run=nonlinear
+Rscript scripts/aggregate.R nonlinear
+Rscript scripts/figures.R nonlinear
 ```
 
-Run one complete scenario family, then generate its tables and figures:
+A two-replication execution check uses the same model settings; it does not assess statistical performance:
 
 ```sh
-Rscript scripts/run.R scenario missing_share --run=missing_share
-Rscript scripts/aggregate.R missing_share
-Rscript scripts/figures.R missing_share
+Rscript scripts/run.R scenario nonlinear_binary --cell=7 --rep=1,2 --method=mice_aipw --spec=glm --run=check
 ```
 
-Results are written to `outputs/<run>/`, with summaries in `tables/` and plots in `figures/`. Seeds are determined by the cell, replication and method. Repeat the same command to resume completed checkpoints; choose a new `--run=NAME` when changing selections, code or settings. The RF-MICE tree count and MICE interval method are recorded in run settings, result rows and summaries. Incomplete runs, duplicate results and incompatible configurations are rejected during aggregation.
+`Rscript scripts/run.R all --run=study` runs all six families, using the three manuscript cells for Scenario 6. Seeds depend on cell, method and replication ID. Repeat a command to resume completed checkpoints. Use a new run name when changing the selected grid, code or settings. Aggregation rejects missing or duplicate attempts and incompatible configurations; fitting failures remain recorded attempts.
 
-To run every scenario, use `Rscript scripts/run.R all --run=study`, then aggregate and plot `study` as above. A complete six-family run can also be rendered with `Rscript scripts/render.R html study`.
+## Files and validation
 
-## Use the included dataset
+`R/` contains statistical functions, `config/` defines designs and settings, `scripts/` contains entry points, and `report/` contains the report and included data. `outputs/` holds generated results and is excluded from Git. The included dataset contains 309,000 attempts across 618 method/design cells; [analysis notes](report/ANALYSIS_NOTES.md) describe its scope and limitations.
 
-`report/inputs/mice_rf_10/` contains 342,000 replication records with **10-tree RF-MICE imputation and normal-based Scenario 6 MICE intervals**, including failed fits. Load this dataset explicitly to generate its tables, figures and report. A complete 500-tree RF-MICE result set is not included.
-
-```sh
-Rscript scripts/aggregate.R bundled_rf10
-Rscript scripts/figures.R bundled_rf10
-Rscript scripts/render.R html bundled_rf10
-```
-
-Outputs are under `outputs/bundled_rf10/`, and the report identifies its input tree count and Scenario 6 MICE interval method. Use `Rscript scripts/render.R pdf bundled_rf10` for PDF. `tables/failure_audit.csv` gives attempted, valid and failed counts and coverage denominators.
-
-## Project files
-
-`R/` contains statistical functions; `config/` defines scenarios and settings; `scripts/` provides command-line entry points; `report/` contains the report source, inputs and analysis notes. `dependencies/` documents the environment and references. Generated outputs and installed libraries are excluded from Git.
-
-Run `Rscript scripts/validate.R` to check the included 10-tree dataset and summary calculations. See [validation scope](validation/VALIDATION.md), [software citations](dependencies/software_citations.txt) and [attribution and licensing](NOTICE). A project-wide license has not been selected.
+Run `Rscript scripts/validate.R` for data, pooling and manuscript-summary checks. [Validation](validation/VALIDATION.md) describes focused estimator checks. See [software citations](dependencies/software_citations.txt) and [attribution](NOTICE). A project-wide license has not been selected.

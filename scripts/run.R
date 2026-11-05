@@ -2,6 +2,7 @@ arg0 <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value=TRUE))
 if (!file.exists(file.path(dirname(arg0), "../renv/setup-complete"))) stop("Run Rscript scripts/setup.R first.")
 source(file.path(dirname(arg0), "../R/project.R"))
 source(file.path(root, "R/workflow.R"))
+source(file.path(root, "R/aggregation.R"))
 a <- commandArgs(TRUE)
 if (!length(a) || !a[1] %in% c("scenario", "all")) stop("Usage: run.R scenario FAMILY | all [--cell=N --rep=N[,N...] --method=M --spec=S --run=NAME]")
 opt <- function(key, default=NULL) { z <- a[startsWith(a,paste0("--",key,"="))]; if(length(z)) sub(paste0("^--",key,"="),"",z[1]) else default }
@@ -10,7 +11,7 @@ selected <- if (mode == "scenario") a[2] else if (!is.null(opt("family"))) opt("
 stopifnot(all(selected %in% families))
 run_name <- opt("run", "simulation")
 if (!grepl("^[a-zA-Z0-9_-]+$",run_name)) stop("Use a simple run name.")
-if (run_name %in% c(bundled_run,"report")) stop("Choose a simulation run name; bundled_rf10 is reserved for the included dataset.")
+if (run_name %in% c(bundled_run,"report")) stop("Choose a simulation run name; bundled is reserved for the included dataset.")
 run_dir <- file.path(root,"outputs",run_name)
 dir.create(run_dir,recursive=TRUE,showWarnings=FALSE)
 fingerprint <- code_fingerprint()
@@ -25,7 +26,7 @@ if (!is.null(rep_selection)) {
 for (family in selected) {
   cfg <- load_implementation(family)
   grid <- cfg$scenario_grid(); aa <- arms(family)
-  cells <- if (!is.null(opt("cell"))) as.integer(opt("cell")) else seq_len(nrow(grid))
+  cells <- if (!is.null(opt("cell"))) as.integer(opt("cell")) else if (!is.null(cfg$default_cells)) cfg$default_cells else seq_len(nrow(grid))
   sims <- if (!is.null(rep_selection)) rep_selection else seq_len(cfg$nsim)
   stopifnot(all(cells %in% seq_len(nrow(grid))),all(sims %in% seq_len(cfg$nsim)))
   if(!is.null(opt("method"))) aa<-aa[aa$method==opt("method"),,drop=FALSE]
@@ -53,6 +54,8 @@ for (family in selected) {
               !identical(old$result$mice_rf_trees,execution_settings$mice_rf_trees)) stop("RF-MICE tree count mismatch: ",path)
           if (method=="mice_aipw" && !identical(old$result$mice_ci_method,
               mice_interval_method(family,method,execution_settings$s6_mice_ci_method))) stop("MICE interval method mismatch: ",path)
+          validate_rf_mice_settings(old$result,family,500L)
+          validate_mice_intervals(old$result,family,"rubin_t")
           next
         }
         message(family," cell ",sid," rep ",sim," ",method," / ",spec)

@@ -11,66 +11,7 @@ run_aipw_rf_result <- function(df, trim = DEFAULT_TRIM) {
     )$fit()
   ))
 
-  summary_text <- capture.output(
-    sm <- fit$summary(g.bound = trim)
-  )
-
-  # Read risk-difference estimates and standard errors from the package result.
-  candidates <- list(sm, fit$result, fit$results)
-  for (obj in candidates) {
-    if (is.data.frame(obj) || is.matrix(obj)) {
-      rn <- rownames(obj)
-      hit <- grep("Risk Difference", rn, fixed = TRUE)
-      if (length(hit)) {
-        z <- as.numeric(obj[hit[1], ])
-        z <- z[is.finite(z)]
-        if (length(z) >= 2) {
-          return(data.frame(
-            estimate = z[1],
-            se = z[2],
-            ci_lower = if (length(z) >= 3) z[3] else z[1] - 1.96 * z[2],
-            ci_upper = if (length(z) >= 4) z[4] else z[1] + 1.96 * z[2]
-          ))
-        }
-      }
-    }
-  }
-
-  line <- summary_text[
-    grepl("Risk Difference", summary_text, fixed = TRUE)
-  ][1]
-
-  if (is.na(line)) {
-    stop("Risk Difference row not found in AIPW summary.")
-  }
-
-  nums <- as.numeric(
-    regmatches(
-      line,
-      gregexpr(
-        "[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?",
-        line,
-        perl = TRUE
-      )
-    )[[1]]
-  )
-
-  out <- empty_result()
-  out$estimate <- nums[1]
-
-  if (length(nums) >= 2) {
-    out$se <- nums[2]
-  }
-
-  if (length(nums) >= 4) {
-    out$ci_lower <- nums[3]
-    out$ci_upper <- nums[4]
-  } else if (is.finite(out$se)) {
-    out$ci_lower <- out$estimate - 1.96 * out$se
-    out$ci_upper <- out$estimate + 1.96 * out$se
-  }
-
-  out
+  extract_aipw_result(fit, trim)
 }
 # Single exposure imputation using a complete-case random forest.
 
@@ -123,12 +64,12 @@ run_mice_full_rf_result <- function(df_missing,m=10L,maxit=10L,seed=1L,trim=DEFA
   q <- vapply(rr,`[[`,numeric(1),"estimate")
   se <- vapply(rr,`[[`,numeric(1),"se")
 
-  if(any(!is.finite(se))) return(data.frame(
+  if(any(!is.finite(se))) return(retain_mice_inputs(data.frame(
     estimate=mean(q,na.rm=TRUE),
     se=NA_real_,ci_lower=NA_real_,ci_upper=NA_real_
-  ))
+  ), q, se^2))
 
-  pool_rubin(q,se^2)
+  retain_mice_inputs(pool_rubin(q,se^2), q, se^2)
 }
 # Package drcmd with random-forest outcome and pseudo-outcome learners.
 

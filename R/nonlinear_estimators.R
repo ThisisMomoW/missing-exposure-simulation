@@ -54,53 +54,6 @@ pool_rubin <- function(q, u, conf_level = 0.95) {
              ci_lower=qbar-crit*se, ci_upper=qbar+crit*se)
 }
 
-extract_aipw_result <- function(fit, trim) {
-  invisible(capture.output(fit$summary(g.bound = trim)))
-  
-  res <- fit$result
-  
-  if (!is.matrix(res) && !is.data.frame(res)) {
-    stop("AIPW fit$result is not a matrix or data frame.")
-  }
-  
-  # Binary outcome only: do not silently accept continuous-outcome data.
-  hit <- which(
-    trimws(rownames(res)) == "Risk Difference"
-  )
-  
-  if (length(hit) != 1L) {
-    stop(
-      "Cannot identify the ATE row. Available rows: ",
-      paste(rownames(res), collapse = ", ")
-    )
-  }
-  
-  required <- c("Estimate", "SE", "95% LCL", "95% UCL")
-  
-  if (!all(required %in% colnames(res))) {
-    stop(
-      "Unexpected AIPW columns: ",
-      paste(colnames(res), collapse = ", ")
-    )
-  }
-  
-  values <- as.numeric(unlist(
-    res[hit, required, drop = FALSE],
-    use.names = FALSE
-  ))
-  
-  if (any(!is.finite(values)) || values[2] <= 0) {
-    stop("AIPW returned nonfinite values or a nonpositive SE.")
-  }
-  
-  data.frame(
-    estimate = values[1],
-    se = values[2],
-    ci_lower = values[3],
-    ci_upper = values[4]
-  )
-}
-
 run_aipw <- function(df, nuisance_spec, trim) {
   q_library <- if (identical(nuisance_spec, "rf")) "SL.ranger" else "SL.glm"
 
@@ -126,15 +79,19 @@ make_analysis_data <- function(dat) {
 
 run_single_imp <- function(df_missing, nuisance_spec, trim) {
   cc <- df_missing[!is.na(df_missing$A), , drop = FALSE]
-  # RF exposure imputation in both outcome-nuisance comparison arms.
-  Xcc <- cc[, c("X1", "X2", "X3", "Y"), drop = FALSE]
-  Xall <- df_missing[, c("X1", "X2", "X3", "Y"), drop = FALSE]
-  imp_fit <- SuperLearner::SuperLearner(
-    Y = cc$A, X = Xcc, family = binomial(), SL.library = "SL.ranger"
-  )
-  ph <- bound_probability(as.numeric(
-    predict(imp_fit, newdata = Xall, onlySL = TRUE)$pred
-  ))
+  if (nuisance_spec == "glm") {
+    imp_fit <- glm(A ~ X1 + X2 + X3 + Y, data=cc, family=binomial())
+    ph <- bound_probability(predict(imp_fit, newdata=df_missing, type="response"))
+  } else {
+    Xcc <- cc[, c("X1", "X2", "X3", "Y"), drop = FALSE]
+    Xall <- df_missing[, c("X1", "X2", "X3", "Y"), drop = FALSE]
+    imp_fit <- SuperLearner::SuperLearner(
+      Y = cc$A, X = Xcc, family = binomial(), SL.library = "SL.ranger"
+    )
+    ph <- bound_probability(as.numeric(
+      predict(imp_fit, newdata = Xall, onlySL = TRUE)$pred
+    ))
+  }
   d <- df_missing
   mis <- is.na(d$A)
   d$A[mis] <- rbinom(sum(mis), 1, ph[mis])
@@ -147,17 +104,19 @@ run_mice <- function(df_missing, nuisance_spec, m, maxit, seed, trim, ntree=500L
 
   meth <- mice::make.method(d)
   meth[] <- ""
-  # RF exposure imputation in both outcome-nuisance comparison arms.
-  meth["A"] <- "rf"
+  meth["A"] <- if (nuisance_spec == "rf") "rf" else "logreg"
 
   pm <- mice::make.predictorMatrix(d)
   pm[,] <- 0
   pm["A", c("Y", "X1", "X2", "X3")] <- 1
 
-  imp <- mice::mice(
-    d, m = m, maxit = maxit, method = meth, predictorMatrix = pm,
-    seed = seed, printFlag = FALSE, rfPackage = "ranger", ntree = ntree
-  )
+  imp <- if (nuisance_spec == "rf") {
+    mice::mice(d, m=m, maxit=maxit, method=meth, predictorMatrix=pm,
+      seed=seed, printFlag=FALSE, rfPackage="ranger", ntree=ntree)
+  } else {
+    mice::mice(d, m=m, maxit=maxit, method=meth, predictorMatrix=pm,
+      seed=seed, printFlag=FALSE)
+  }
 
   rr <- lapply(seq_len(m), function(k) {
     z <- mice::complete(imp, k)
@@ -167,11 +126,7 @@ run_mice <- function(df_missing, nuisance_spec, m, maxit, seed, trim, ntree=500L
 
   q <- vapply(rr, `[[`, numeric(1), "estimate")
   se <- vapply(rr, `[[`, numeric(1), "se")
-  pooled <- pool_rubin(q, se^2)
-  # Retain imputation-level inputs so intervals can be recalculated without refitting.
-  pooled$mice_q <- list(q)
-  pooled$mice_u <- list(se^2)
-  pooled
+  retain_mice_inputs(pool_rubin(q, se^2), q, se^2)
 }
 
 run_drcmd <- function(df_missing, nuisance_spec, trim) {

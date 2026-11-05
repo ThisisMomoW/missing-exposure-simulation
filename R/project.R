@@ -16,19 +16,27 @@ options(stringsAsFactors = FALSE)
 families <- c("missing_share", "gamma_y", "outcome_interaction",
               "missing_mechanism", "outcome_interaction_mcar", "nonlinear_binary")
 methods <- c("full_aipw", "cc_aipw", "single_imp_aipw", "mice_aipw", "drcmd", "tr_aipw")
-bundled_run <- "bundled_rf10"
-bundled_input_dir <- file.path(root,"report/inputs/mice_rf_10")
+bundled_run <- "bundled"
+bundled_input_dir <- file.path(root,"report/inputs/simulation")
 uses_rf_mice <- function(family, method, spec) {
-  method == "mice_aipw" & (family == "nonlinear_binary" |
-    (family == "outcome_interaction" & spec == "rf"))
+  method == "mice_aipw" & spec == "rf" &
+    family %in% c("nonlinear_binary", "outcome_interaction")
+}
+imputation_model <- function(family, method, spec) {
+  ifelse(method %in% c("single_imp_aipw", "mice_aipw"),
+    ifelse(spec == "rf", "rf", "logistic"), NA_character_)
 }
 bundled_settings <- function() {
   meta <- read.csv(file.path(bundled_input_dir,"metadata.csv"))
-  stopifnot(nrow(meta)==1L,meta$dataset==bundled_run,meta$mice_rf_trees==10L,
-            identical(meta$s6_mice_ci_method,"normal_1.96"))
+  stopifnot(nrow(meta)==1L,meta$dataset==bundled_run,meta$mice_rf_trees==500L,
+            identical(meta$s6_mice_ci_method,"rubin_t"), meta$s6_drcmd_folds==10L)
   list(run=bundled_run,mice_rf_trees=as.integer(meta$mice_rf_trees),
        s6_mice_ci_method=meta$s6_mice_ci_method,
        s6_drcmd_folds=as.character(meta$s6_drcmd_folds))
+}
+bundled_cells <- function(family) {
+  design <- read.csv(file.path(bundled_input_dir,"design.csv"))
+  design$scenario_id[design$family==family]
 }
 mice_interval_method <- function(family, method, s6_method) {
   ifelse(method=="mice_aipw",if(family=="nonlinear_binary") s6_method else "rubin_t",NA_character_)

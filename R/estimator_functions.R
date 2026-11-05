@@ -154,6 +154,53 @@ g_sl_library <- function(nuisance_spec = c("main", "interaction")) {
 }
 
 
+extract_aipw_result <- function(fit, trim) {
+  invisible(capture.output(fit$summary(g.bound = trim)))
+
+  res <- fit$result
+
+  if (!is.matrix(res) && !is.data.frame(res)) {
+    stop("AIPW fit$result is not a matrix or data frame.")
+  }
+
+  # Binary outcome only: do not silently accept continuous-outcome data.
+  hit <- which(
+    trimws(rownames(res)) == "Risk Difference"
+  )
+
+  if (length(hit) != 1L) {
+    stop(
+      "Cannot identify the ATE row. Available rows: ",
+      paste(rownames(res), collapse = ", ")
+    )
+  }
+
+  required <- c("Estimate", "SE", "95% LCL", "95% UCL")
+
+  if (!all(required %in% colnames(res))) {
+    stop(
+      "Unexpected AIPW columns: ",
+      paste(colnames(res), collapse = ", ")
+    )
+  }
+
+  values <- as.numeric(unlist(
+    res[hit, required, drop = FALSE],
+    use.names = FALSE
+  ))
+
+  if (any(!is.finite(values)) || values[2] <= 0 || values[3] > values[4]) {
+    stop("AIPW returned nonfinite values, a nonpositive SE, or reversed confidence limits.")
+  }
+
+  data.frame(
+    estimate = values[1],
+    se = values[2],
+    ci_lower = values[3],
+    ci_upper = values[4]
+  )
+}
+
 run_aipw_result <- function(df, nuisance_spec="main", trim=DEFAULT_TRIM) {
   q_learner <- q_sl_library(nuisance_spec)
   g_learner <- g_sl_library(nuisance_spec)
@@ -165,39 +212,7 @@ run_aipw_result <- function(df, nuisance_spec="main", trim=DEFAULT_TRIM) {
       g.SL.library=g_learner
     )$fit()
   ))
-  # g.bound is applied when the estimand and influence-curve SE are computed.
-  # Capture the printed table once; repeated summary() calls create very large
-  # Slurm logs and materially slow the Monte Carlo jobs.
-  summary_text <- capture.output(
-    sm <- fit$summary(g.bound=trim)
-  )
-
-  # Prefer structured output. Fall back to parsing printed output for package
-  # versions whose summary method invisibly returns the R6 object.
-  candidates <- list(sm, fit$result, fit$results)
-  for (obj in candidates) {
-    if (is.data.frame(obj) || is.matrix(obj)) {
-      rn <- rownames(obj)
-      hit <- grep("Risk Difference", rn, fixed=TRUE)
-      if (length(hit)) {
-        z <- as.numeric(obj[hit[1],])
-        z <- z[is.finite(z)]
-        if (length(z) >= 2) {
-          return(data.frame(estimate=z[1], se=z[2],
-                            ci_lower=if(length(z)>=3) z[3] else z[1]-1.96*z[2],
-                            ci_upper=if(length(z)>=4) z[4] else z[1]+1.96*z[2]))
-        }
-      }
-    }
-  }
-  line <- summary_text[grepl("Risk Difference",summary_text,fixed=TRUE)][1]
-  if (is.na(line)) stop("Risk Difference row not found in AIPW summary")
-  nums <- as.numeric(regmatches(line,gregexpr("[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?",line,perl=TRUE))[[1]])
-  out <- empty_result(); out$estimate <- nums[1]
-  if(length(nums)>=2) out$se <- nums[2]
-  if(length(nums)>=4) {out$ci_lower<-nums[3]; out$ci_upper<-nums[4]}
-  else if(is.finite(out$se)) {out$ci_lower<-out$estimate-1.96*out$se; out$ci_upper<-out$estimate+1.96*out$se}
-  out
+  extract_aipw_result(fit, trim)
 }
 
 run_single_imp_result <- function(df_missing, nuisance_spec="main", trim=DEFAULT_TRIM) {
@@ -250,6 +265,13 @@ pool_rubin <- function(q, u, conf_level = 0.95) {
              ci_lower=qbar-crit*se, ci_upper=qbar+crit*se)
 }
 
+# Keep the inputs to Rubin pooling, including invalid component fits.
+retain_mice_inputs <- function(result, q, u) {
+  result$mice_q <- list(q)
+  result$mice_u <- list(u)
+  result
+}
+
 run_mice_result <- function(df_missing,m=10L,maxit=10L,seed=1L,nuisance_spec="main",trim=DEFAULT_TRIM) {
   d <- df_missing[,c("A","Y","X1","X2","X3")]
 
@@ -297,15 +319,12 @@ run_mice_result <- function(df_missing,m=10L,maxit=10L,seed=1L,nuisance_spec="ma
   se <- vapply(rr,`[[`,numeric(1),"se")
 
   if(any(!is.finite(se))) {
-    return(data.frame(
-      estimate=mean(q),
-      se=NA,
-      ci_lower=NA,
-      ci_upper=NA
-    ))
+    return(retain_mice_inputs(data.frame(
+      estimate=mean(q), se=NA_real_, ci_lower=NA_real_, ci_upper=NA_real_
+    ), q, se^2))
   }
 
-  pool_rubin(q,se^2)
+  retain_mice_inputs(pool_rubin(q,se^2), q, se^2)
 }
 
 run_drcmd_result <- function(df_missing,nuisance_spec="main",trim=DEFAULT_TRIM) {

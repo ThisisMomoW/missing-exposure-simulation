@@ -1,0 +1,6 @@
+"family","sid","method","spec","replication","rf_forests","logistic_imputations","max_absolute_difference","status"
+"nonlinear_binary",7,"single_imp_aipw","glm",1,0,0,0,"ok"
+"nonlinear_binary",7,"single_imp_aipw","rf",1,0,0,0,"ok"
+"nonlinear_binary",7,"mice_aipw","glm",1,0,100,0,"ok"
+"nonlinear_binary",7,"mice_aipw","rf",1,100,0,0,"ok"
+"outcome_interaction",1,"mice_aipw","rf",1,100,0,0,"ok"

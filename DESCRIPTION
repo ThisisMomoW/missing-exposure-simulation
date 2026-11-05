@@ -7,4 +7,4 @@ Description: Research code for six simulation families evaluating estimators
     Includes simulation runners, performance summaries, figures and a report.
 License: License decision pending
 Imports: AIPW, SuperLearner, drcmd, mice, ranger, rootSolve, doParallel,
-    foreach, dplyr, tidyr, ggplot2, knitr, rmarkdown
+    foreach, dplyr, tidyr, ggplot2, knitr, rmarkdown, ragg

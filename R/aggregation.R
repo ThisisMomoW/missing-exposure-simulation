@@ -19,10 +19,22 @@ validate_rf_mice_settings <- function(x, family, ntree) {
       anyNA(x$mice_rf_trees[selected]) || any(x$mice_rf_trees[selected]!=ntree))) {
     stop("Missing or incompatible RF-MICE tree counts: ",family)
   }
+  if (any(!is.na(x$mice_rf_trees[!selected])))
+    stop("RF-MICE tree count assigned to a different method: ",family)
+  expected <- imputation_model(family,x$method,x$nuisance_spec)
+  if (!"imputation" %in% names(x) || !identical(as.character(x$imputation),expected))
+    stop("Incompatible imputation specification: ",family)
+  mi <- x$method=="mice_aipw"
+  expected_method <- ifelse(selected,"rf","logreg")
+  if (any(mi) && (!all(c("mice_method","mice_m","mice_maxit") %in% names(x)) ||
+      anyNA(x$mice_method[mi]) || any(x$mice_method[mi]!=expected_method[mi]) ||
+      anyNA(x$mice_m[mi]) || any(x$mice_m[mi]!=10L) ||
+      anyNA(x$mice_maxit[mi]) || any(x$mice_maxit[mi]!=10L)))
+    stop("Incompatible MICE settings: ",family)
   invisible(TRUE)
 }
 validate_mice_intervals <- function(x, family, s6_method) {
-  if(length(s6_method)!=1L || is.na(s6_method) || !s6_method %in% c("rubin_t","normal_1.96"))
+  if(length(s6_method)!=1L || is.na(s6_method) || s6_method != "rubin_t")
     stop("Missing or unsupported Scenario 6 MICE interval method")
   selected <- x$method=="mice_aipw"
   expected <- mice_interval_method(family,x$method,s6_method)

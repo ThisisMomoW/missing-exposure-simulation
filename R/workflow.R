@@ -87,6 +87,10 @@ fit_replication <- function(family, sid, sim, method, spec, dat, sc) {
   rr$fit_seed <- seeds[["fit"]]; rr$internal_seed <- seeds[["internal"]]
   rr$drcmd_k <- if (method == "drcmd") 10L else NA_integer_
   rr$mice_rf_trees <- if (uses_rf_mice(family,method,spec)) execution_settings$mice_rf_trees else NA_integer_
+  rr$imputation <- imputation_model(family,method,spec)
+  rr$mice_method <- if (method=="mice_aipw") if (spec=="rf") "rf" else "logreg" else NA_character_
+  rr$mice_m <- if (method=="mice_aipw") mice_m else NA_integer_
+  rr$mice_maxit <- if (method=="mice_aipw") mice_maxit else NA_integer_
   rr$mice_ci_method <- if (method != "mice_aipw") NA_character_ else
     if (family == "nonlinear_binary") execution_settings$s6_mice_ci_method else "rubin_t"
   rr

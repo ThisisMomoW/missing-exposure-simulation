@@ -7,7 +7,7 @@ out<-file.path(root,"outputs",run);dir.create(file.path(out,"figures"),recursive
 settings_path<-file.path(out,"Results/settings.rds")
 if(!file.exists(settings_path)) stop("Aggregate the named run first")
 settings<-readRDS(settings_path)
-if(length(settings$s6_mice_ci_method)!=1L || !settings$s6_mice_ci_method %in% c("rubin_t","normal_1.96"))
+if(length(settings$s6_mice_ci_method)!=1L || !settings$s6_mice_ci_method %in% "rubin_t")
   stop("Missing or unsupported Scenario 6 MICE interval method; aggregate the named run first")
 if(length(settings$mice_rf_trees)!=1L || !identical(settings$run,run)) stop("Missing or incompatible RF-MICE result settings")
 if(run==bundled_run) {
