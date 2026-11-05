@@ -51,6 +51,8 @@ for (family in selected) {
           stopifnot(identical(old$code_fingerprint,fingerprint),identical(old$settings,execution_settings))
           if (uses_rf_mice(family,method,spec) &&
               !identical(old$result$mice_rf_trees,execution_settings$mice_rf_trees)) stop("RF-MICE tree count mismatch: ",path)
+          if (method=="mice_aipw" && !identical(old$result$mice_ci_method,
+              mice_interval_method(family,method,execution_settings$s6_mice_ci_method))) stop("MICE interval method mismatch: ",path)
           next
         }
         message(family," cell ",sid," rep ",sim," ",method," / ",spec)

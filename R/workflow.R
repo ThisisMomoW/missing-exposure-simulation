@@ -15,6 +15,7 @@ load_implementation <- function(family) {
   stopifnot(formals(AIPW::AIPW$public_methods$initialize)$k_split == 10L,
             formals(SuperLearner::SL.ranger)$num.trees == 500L,
             execution_settings$mice_rf_trees == 500L,
+            execution_settings$s6_mice_ci_method == "rubin_t",
             formals(drcmd::drcmd)$cv_folds == 5L)
   invisible(cfg)
 }
@@ -86,5 +87,7 @@ fit_replication <- function(family, sid, sim, method, spec, dat, sc) {
   rr$fit_seed <- seeds[["fit"]]; rr$internal_seed <- seeds[["internal"]]
   rr$drcmd_k <- if (method == "drcmd") 10L else NA_integer_
   rr$mice_rf_trees <- if (uses_rf_mice(family,method,spec)) execution_settings$mice_rf_trees else NA_integer_
+  rr$mice_ci_method <- if (method != "mice_aipw") NA_character_ else
+    if (family == "nonlinear_binary") execution_settings$s6_mice_ci_method else "rubin_t"
   rr
 }

@@ -21,6 +21,16 @@ validate_rf_mice_settings <- function(x, family, ntree) {
   }
   invisible(TRUE)
 }
+validate_mice_intervals <- function(x, family, s6_method) {
+  if(length(s6_method)!=1L || is.na(s6_method) || !s6_method %in% c("rubin_t","normal_1.96"))
+    stop("Missing or unsupported Scenario 6 MICE interval method")
+  selected <- x$method=="mice_aipw"
+  expected <- mice_interval_method(family,x$method,s6_method)
+  if(any(selected) && (!"mice_ci_method" %in% names(x) ||
+      anyNA(x$mice_ci_method[selected]) || any(x$mice_ci_method[selected]!=expected[selected])))
+    stop("Missing or incompatible MICE interval methods: ",family)
+  invisible(TRUE)
+}
 valid_rows <- function(x) {
   ok <- is.finite(x$estimate) & is.finite(x$se) & x$se >= 0 &
     is.finite(x$ci_lower) & is.finite(x$ci_upper) & x$ci_lower <= x$ci_upper

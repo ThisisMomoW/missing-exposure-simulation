@@ -22,23 +22,36 @@ safe_result <- function(expr) {
   }, error = function(e) empty_result(error = conditionMessage(e)))
 }
 
-pool_rubin <- function(q, u) {
-  keep <- is.finite(q) & is.finite(u)
+pool_rubin <- function(q, u, conf_level = 0.95) {
+  keep <- is.finite(q) & is.finite(u) & u >= 0
   q <- q[keep]
   u <- u[keep]
   m <- length(q)
-  if (m < 2L) stop("Fewer than two valid imputations.")
+
+  if (m < 2L) {
+    return(data.frame(estimate=if (m == 1L) q else NA_real_,
+                      se=NA_real_, ci_lower=NA_real_, ci_upper=NA_real_))
+  }
+
   qbar <- mean(q)
   ubar <- mean(u)
   b <- stats::var(q)
-  total <- ubar + (1 + 1 / m) * b
-  se <- sqrt(total)
-  data.frame(
-    estimate = qbar,
-    se = se,
-    ci_lower = qbar - 1.96 * se,
-    ci_upper = qbar + 1.96 * se
-  )
+  tvar <- ubar + (1 + 1 / m) * b
+  se <- sqrt(tvar)
+
+  # Rubin large-sample degrees of freedom. When between-imputation variance is
+  # essentially zero, the normal approximation is recovered.
+  if (!is.finite(b) || b <= .Machine$double.eps) {
+    df <- Inf
+  } else {
+    r <- ((1 + 1 / m) * b) / ubar
+    df <- (m - 1) * (1 + 1 / r)^2
+  }
+  alpha <- 1 - conf_level
+  crit <- if (is.finite(df)) stats::qt(1 - alpha / 2, df=df) else stats::qnorm(1 - alpha / 2)
+
+  data.frame(estimate=qbar, se=se,
+             ci_lower=qbar-crit*se, ci_upper=qbar+crit*se)
 }
 
 extract_aipw_result <- function(fit, trim) {
@@ -154,7 +167,11 @@ run_mice <- function(df_missing, nuisance_spec, m, maxit, seed, trim, ntree=500L
 
   q <- vapply(rr, `[[`, numeric(1), "estimate")
   se <- vapply(rr, `[[`, numeric(1), "se")
-  pool_rubin(q, se^2)
+  pooled <- pool_rubin(q, se^2)
+  # Retain imputation-level inputs so intervals can be recalculated without refitting.
+  pooled$mice_q <- list(q)
+  pooled$mice_u <- list(se^2)
+  pooled
 }
 
 run_drcmd <- function(df_missing, nuisance_spec, trim) {

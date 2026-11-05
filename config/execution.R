@@ -5,6 +5,7 @@ execution_settings <- list(
   drcmd_outer_folds = 10L, drcmd_inner_cv = 5L,
   sl_ranger_trees = 500L, sl_imputation_inner_cv = 10L,
   mice_rf_trees = 500L, mice_m = 10L, mice_maxit = 10L,
+  s6_mice_ci_method = "rubin_t",
   trim = 0.025, imputation_probability_epsilon = 1e-6,
   tr_bootstrap = 100L, tr_min_valid = 80L, tr_shrink = 0.99,
   rng = c("Mersenne-Twister", "Inversion", "Rejection")

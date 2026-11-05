@@ -7,6 +7,8 @@ out<-file.path(root,"outputs",run);dir.create(file.path(out,"figures"),recursive
 settings_path<-file.path(out,"Results/settings.rds")
 if(!file.exists(settings_path)) stop("Aggregate the named run first")
 settings<-readRDS(settings_path)
+if(length(settings$s6_mice_ci_method)!=1L || !settings$s6_mice_ci_method %in% c("rubin_t","normal_1.96"))
+  stop("Missing or unsupported Scenario 6 MICE interval method; aggregate the named run first")
 if(length(settings$mice_rf_trees)!=1L || !identical(settings$run,run)) stop("Missing or incompatible RF-MICE result settings")
 if(run==bundled_run) {
   # Knit the actual report chunks to export exactly its figures without fitting.
@@ -23,7 +25,8 @@ if(run==bundled_run) {
         ggplot2::geom_point(position=ggplot2::position_dodge(width=.4))+
         ggplot2::facet_wrap(~n)+ggplot2::coord_flip()+ggplot2::theme_bw()+
         ggplot2::labs(subtitle=if(any(uses_rf_mice(family,x$method,x$nuisance_spec)))
-          paste("RF-MICE imputation:",settings$mice_rf_trees,"trees") else NULL)
+          paste("RF-MICE imputation:",settings$mice_rf_trees,"trees",
+            if(family=="nonlinear_binary") paste("| MICE intervals:",if(settings$s6_mice_ci_method=="rubin_t") "Rubin t" else "Normal (1.96 x SE)") else "") else NULL)
       ggplot2::ggsave(file.path(out,"figures",paste0(family,"_",metric,".png")),p,width=9,height=5,dpi=140)
     }
   }

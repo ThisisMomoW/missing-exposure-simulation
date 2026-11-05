@@ -8,6 +8,8 @@ if(!grepl("^[a-zA-Z0-9_-]+$",run)) stop("Invalid run name")
 out<-file.path(root,"outputs",run)
 if(!file.exists(file.path(out,"Results/settings.rds")))stop("Aggregate the complete run first")
 settings<-readRDS(file.path(out,"Results/settings.rds"))
+if(length(settings$s6_mice_ci_method)!=1L || !settings$s6_mice_ci_method %in% c("rubin_t","normal_1.96"))
+  stop("Missing or unsupported Scenario 6 MICE interval method; aggregate the named run first")
 if(!identical(settings$run,run) || length(settings$mice_rf_trees)!=1L) stop("Missing or incompatible RF-MICE result settings")
 if(!setequal(settings$families,families)) stop("Report rendering requires all six scenario families")
 rmarkdown::render(file.path(root,"report/report.Rmd"),output_format=paste0(format,"_document"),

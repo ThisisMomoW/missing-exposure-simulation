@@ -22,12 +22,16 @@ Full-data AIPW uses the simulated complete exposure. Complete-case AIPW uses obs
 | RF single imputation | Scenario 3: fit on complete cases; 10 internal CV folds; no outer imputation cross-fit | Both outcome specifications |
 | MICE | 10 imputations, 10 iterations; logistic imputation for main/interaction models, RF for Scenario 3 RF | 10 imputations, 10 iterations; RF imputation for both outcome specifications |
 | MICE RF | 500 trees; `rfPackage = "ranger"` | Same |
-| MICE intervals | Rubin large-sample t degrees of freedom | Normal, estimate ±1.96 SE |
+| MICE intervals | Rubin large-sample t degrees of freedom | Same, for both GLM and RF |
 | TR-AIPW | 100 bootstrap resamples; at least 80 valid; 0.99 inverse-weight quantile shrinkage | Same; GLM main-effects specification only |
 
 RF-MICE wrappers pass `ntree = 500` explicitly to `mice::mice()`, which forwards it to `mice.impute.rf()` and the ranger donor forest. The count comes from `execution_settings$mice_rf_trees`. SuperLearner forests use a separate 500-tree setting. The ranger backend and predictor matrix are specified in the estimator functions; other ranger tuning parameters use their package defaults.
 
 AIPW uses package influence-curve standard errors and Wald intervals. `drcmd` uses the returned ATE standard error and a normal interval. TR-AIPW's SE is the sample SD of valid bootstrap estimates; its confidence interval uses empirical 2.5% and 97.5% quantiles with R's `type = 1`. Bootstrap intervention risks must lie in [0,1] and the risk difference in [−1,1]. Weight shrinkage applies to the point estimate and every bootstrap resample. These intervals are percentile intervals, so their coverage is not determined by a Wald SE ratio.
+
+For MICE, let Q and U be the imputation estimates and their estimated variances. Pooling uses Qbar = mean(Q), Ubar = mean(U), B = var(Q), and T = Ubar + (1 + 1/m) B, where m counts usable imputations. With r = (1 + 1/m) B / Ubar, Rubin's degrees of freedom are df = (m − 1)(1 + 1/r)^2. The 95% interval is Qbar ± qt(0.975, df) sqrt(T). If B is at most machine precision, df is infinite and the critical value is qnorm(0.975). No additional degrees-of-freedom adjustment is applied.
+
+Pooling excludes nonfinite Q/U pairs and negative U. With fewer than two usable imputations, SE and interval endpoints are NA; one usable estimate is returned as the point estimate, and zero usable estimates give NA. These rules are the same in all scenarios. Scenario 6 saves the per-imputation vectors as `mice_q` and `mice_u` with each successful MICE result, allowing intervals to be recalculated without fitting the models again.
 
 ## Seeds and execution
 
@@ -35,13 +39,13 @@ The RNG is Mersenne–Twister with Inversion normal draws and Rejection sampling
 
 The seed scheme reuses streams across families, and TR bootstrap streams can overlap across replications in families 1–5. Results across these groups should not be treated as independent simulation experiments. Matching software versions and RNG settings is necessary for reproducible numerical results.
 
-Each named run records its selected cells, replications, methods, settings and package versions, including `mice_rf_trees = 500`. RF-MICE result rows and aggregated tables also record that count; it is NA for methods without RF-MICE imputation. Results include seed identifiers, warnings and errors. Repeating the same command skips completed replication files; an unfinished fit restarts from its assigned seed. A different selection or code/configuration fingerprint requires a new run name. Execution is sequential by default. The TR bootstrap uses `SLURM_CPUS_PER_TASK` when available and assigns seeds by resample index.
+Each named run records its selected cells, replications, methods, settings and package versions, including `mice_rf_trees = 500` and `s6_mice_ci_method = "rubin_t"`. RF-MICE result rows and aggregated tables also record that count; it is NA for methods without RF-MICE imputation. Results include seed identifiers, warnings and errors. Repeating the same command skips completed replication files; an unfinished fit restarts from its assigned seed. A different selection or code/configuration fingerprint requires a new run name. MICE rows also carry `mice_ci_method`; aggregation and cache reuse reject missing or incompatible interval methods. Execution is sequential by default. The TR bootstrap uses `SLURM_CPUS_PER_TASK` when available and assigns seeds by resample index.
 
 Aggregation checks the expected replication keys and rejects duplicate, missing or unexpected records and incompatible configurations. A subset run is complete only for its selected grid. A fitting failure is a recorded attempt, not a missing file.
 
 ## Included inputs and failures
 
-`report/inputs/mice_rf_10/` contains a dataset using 10-tree RF-MICE imputation. Its `metadata.csv` records this setting. Select `bundled_rf10` explicitly in aggregation, plotting and rendering commands. The simulation runner uses 500 trees; a complete result set at that setting is not included. The bundled dataset has one RDS data frame per family:
+`report/inputs/mice_rf_10/` contains a dataset using 10-tree RF-MICE imputation and normal-based Scenario 6 MICE intervals (`normal_1.96`). Its `metadata.csv` records both settings. Select `bundled_rf10` explicitly in aggregation, plotting and rendering commands. The simulation runner uses 500 trees; a complete result set at that setting is not included. The bundled dataset has one RDS data frame per family:
 
 | File | Replication records |
 |---|---:|
@@ -52,9 +56,23 @@ Aggregation checks the expected replication keys and rejects duplicate, missing 
 | `outcome_interaction_mcar.rds` | 54,000 |
 | `nonlinear_binary.rds` | 49,500 |
 
-Rows identify the design cell, replication, method and nuisance specification and contain the estimate, SE, interval and target risk difference. Bootstrap and missingness diagnostics are included where available. `settings.rds` records the Scenario 6 drcmd fold count. Aggregation writes the selected dataset's tree count and fold count to `outputs/<run>/Results/settings.rds`; rendering reads these values instead of assuming the current simulation settings. These files support the bundled dataset's report tables and figures; simulated individual-level datasets are generated by the runner when needed.
+Rows identify the design cell, replication, method and nuisance specification and contain the estimate, SE, interval and target risk difference. Bootstrap and missingness diagnostics are included where available. `settings.rds` records the Scenario 6 drcmd fold count. Aggregation writes the selected dataset's tree count, MICE interval method and fold count to `outputs/<run>/Results/settings.rds`; rendering reads these values instead of assuming the current simulation settings. These files support the bundled dataset's report tables and figures; simulated individual-level datasets are generated by the runner when needed.
 
 Of the 342,000 records, **302 fail joint estimate/SE/interval validity checks**, including seven in Scenario 6. Some bundled failed fits have NA results without an error reason. The runner records available warnings and errors; a failure returned internally as an NA row may provide less detail. Imputation pooling can exclude invalid component fits, so a pooled estimate does not necessarily imply that all 10 component fits succeeded. Package-version metadata are incomplete at the replication level; see [the environment record](../dependencies/ENVIRONMENT.md).
+
+## Scenario 6 MICE runs needed for t-based coverage
+
+The saved Scenario 6 normal-interval results contain pooled estimates, SEs and endpoints, but no per-imputation Q/U, within-/between-imputation variance components or Rubin degrees of freedom. Total variance alone cannot determine the degrees of freedom. This also applies to the saved 500-tree GLM execution check in `outputs/rf500_check/`. Their coverage cannot be converted to t-based coverage without repeating imputation and the downstream fits.
+
+The affected study runs are `nonlinear_binary` / `mice_aipw` / `glm` and `rf`, for all nine cells (n = 500/1000/2000 crossed with gamma_int = 0/0.5/1), replications 1–500: 9,000 fits in total. Other estimators and Scenarios 1–5 do not require reruns for this interval change. To execute these MICE runs when ready:
+
+```sh
+Rscript scripts/run.R scenario nonlinear_binary --method=mice_aipw --run=s6_mice_t
+Rscript scripts/aggregate.R s6_mice_t
+Rscript scripts/figures.R s6_mice_t
+```
+
+This command is a full MICE study run, not a short check. The bundled normal-interval results remain unchanged and explicitly labeled; their coverage summaries are not t-based results.
 
 ## Summary definitions
 

@@ -15,7 +15,7 @@ Simulation study of estimators for the marginal causal risk difference, E[Y(1) â
 
 The design uses sample sizes of 500, 1,000 and 2,000, with **500 Monte Carlo replications per cell**. Methods are full-data AIPW, complete-case AIPW, single-imputation AIPW, MICE AIPW, package `drcmd`, and TR-AIPW. Families 1â€“5 use main-effects and interaction models; `outcome_interaction` also includes random forests. `nonlinear_binary` uses GLM and RF specifications, with GLM only for TR-AIPW.
 
-AIPW and `drcmd` use 10 outer cross-fitting folds. MICE uses **10 imputations and 10 iterations**, with **500 trees** for RF imputation; SuperLearner forests use **500 trees**. TR-AIPW estimates uncertainty from **100 bootstrap resamples**, requiring at least 80 valid estimates. See [analysis settings and limitations](report/ANALYSIS_NOTES.md) for nuisance models, inference and summary definitions.
+AIPW and `drcmd` use 10 outer cross-fitting folds. MICE uses **10 imputations and 10 iterations**, with **500 trees** for RF imputation; SuperLearner forests use **500 trees**. MICE confidence intervals use Rubin t quantiles in all scenarios. TR-AIPW estimates uncertainty from **100 bootstrap resamples**, requiring at least 80 valid estimates. See [analysis settings and limitations](report/ANALYSIS_NOTES.md) for nuisance models, inference and summary definitions.
 
 ## Installation
 
@@ -43,13 +43,13 @@ Rscript scripts/aggregate.R missing_share
 Rscript scripts/figures.R missing_share
 ```
 
-Results are written to `outputs/<run>/`, with summaries in `tables/` and plots in `figures/`. Seeds are determined by the cell, replication and method. Repeat the same command to resume completed checkpoints; choose a new `--run=NAME` when changing selections, code or settings. The RF-MICE tree count is recorded in run settings, result rows and summaries. Incomplete runs, duplicate results and incompatible configurations are rejected during aggregation.
+Results are written to `outputs/<run>/`, with summaries in `tables/` and plots in `figures/`. Seeds are determined by the cell, replication and method. Repeat the same command to resume completed checkpoints; choose a new `--run=NAME` when changing selections, code or settings. The RF-MICE tree count and MICE interval method are recorded in run settings, result rows and summaries. Incomplete runs, duplicate results and incompatible configurations are rejected during aggregation.
 
 To run every scenario, use `Rscript scripts/run.R all --run=study`, then aggregate and plot `study` as above. A complete six-family run can also be rendered with `Rscript scripts/render.R html study`.
 
 ## Use the included dataset
 
-`report/inputs/mice_rf_10/` contains 342,000 replication records with **10-tree RF-MICE imputation**, including failed fits. Load this dataset explicitly to generate its tables, figures and report. A complete 500-tree RF-MICE result set is not included.
+`report/inputs/mice_rf_10/` contains 342,000 replication records with **10-tree RF-MICE imputation and normal-based Scenario 6 MICE intervals**, including failed fits. Load this dataset explicitly to generate its tables, figures and report. A complete 500-tree RF-MICE result set is not included.
 
 ```sh
 Rscript scripts/aggregate.R bundled_rf10
@@ -57,7 +57,7 @@ Rscript scripts/figures.R bundled_rf10
 Rscript scripts/render.R html bundled_rf10
 ```
 
-Outputs are under `outputs/bundled_rf10/`, and the report identifies its input tree count. Use `Rscript scripts/render.R pdf bundled_rf10` for PDF. `tables/failure_audit.csv` gives attempted, valid and failed counts and coverage denominators.
+Outputs are under `outputs/bundled_rf10/`, and the report identifies its input tree count and Scenario 6 MICE interval method. Use `Rscript scripts/render.R pdf bundled_rf10` for PDF. `tables/failure_audit.csv` gives attempted, valid and failed counts and coverage denominators.
 
 ## Project files
 

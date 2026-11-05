@@ -24,9 +24,14 @@ uses_rf_mice <- function(family, method, spec) {
 }
 bundled_settings <- function() {
   meta <- read.csv(file.path(bundled_input_dir,"metadata.csv"))
-  stopifnot(nrow(meta)==1L,meta$dataset==bundled_run,meta$mice_rf_trees==10L)
+  stopifnot(nrow(meta)==1L,meta$dataset==bundled_run,meta$mice_rf_trees==10L,
+            identical(meta$s6_mice_ci_method,"normal_1.96"))
   list(run=bundled_run,mice_rf_trees=as.integer(meta$mice_rf_trees),
+       s6_mice_ci_method=meta$s6_mice_ci_method,
        s6_drcmd_folds=as.character(meta$s6_drcmd_folds))
+}
+mice_interval_method <- function(family, method, s6_method) {
+  ifelse(method=="mice_aipw",if(family=="nonlinear_binary") s6_method else "rubin_t",NA_character_)
 }
 load_config <- function(family) {
   stopifnot(family %in% families)

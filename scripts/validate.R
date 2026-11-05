@@ -19,7 +19,8 @@ for (family in families) {
   stopifnot(nrow(sm)==length(cells)*nrow(aa),sum(audit$n_attempted)==nrow(x),
             all(audit$n_valid+audit$n_failed==audit$n_attempted))
   checks[[family]] <- data.frame(family=family,records=nrow(x),
-    method_cells=nrow(sm),valid=sum(audit$n_valid),failed=sum(audit$n_failed),mice_rf_trees=input_settings$mice_rf_trees)
+    method_cells=nrow(sm),valid=sum(audit$n_valid),failed=sum(audit$n_failed),mice_rf_trees=input_settings$mice_rf_trees,
+    mice_ci_method=if(family=="nonlinear_binary") input_settings$s6_mice_ci_method else "rubin_t")
 
   # A partial cell is not a complete run; duplicate and altered keys are errors.
   sample <- x[x$scenario_id==1L & x$sim==1L,,drop=FALSE]

@@ -62,6 +62,11 @@ project_root <- normalizePath(
 results_dir <- file.path(project_root, params$results_dir)
 result_settings <- readRDS(file.path(results_dir, "settings.rds"))
 mice_rf_trees <- result_settings$mice_rf_trees
+s6_mice_ci_method <- result_settings$s6_mice_ci_method
+if (length(s6_mice_ci_method) != 1L || !s6_mice_ci_method %in% c("rubin_t", "normal_1.96")) {
+  stop("Result settings must identify the Scenario 6 MICE interval method.")
+}
+s6_mice_ci_label <- if (s6_mice_ci_method == "rubin_t") "Rubin t-based" else "normal (1.96 × SE)"
 if (length(mice_rf_trees) != 1L || is.na(mice_rf_trees) || mice_rf_trees < 1L) {
   stop("Result settings must identify the RF-MICE tree count.")
 }
@@ -279,7 +284,7 @@ truth_by_gamma <- outcome_interaction |>
 
 # Abstract
 
-**Result settings:** RF-MICE uses `r mice_rf_trees` trees in the results loaded for this report.
+**Result settings:** RF-MICE uses `r mice_rf_trees` trees in the results loaded for this report. Scenario 6 MICE confidence intervals are `r s6_mice_ci_label`.
 
 This simulation study compares six approaches for estimating a marginal causal risk difference when a binary exposure is partially missing. The target estimand is
 
@@ -368,13 +373,14 @@ kable(
 
 ## Simulation scenarios
 
-Five scenario families were evaluated, with 500 Monte Carlo replications per design cell:
+Six scenario families were evaluated, with 500 Monte Carlo replications per design cell:
 
 1. **Varying missing share:** target missing proportions 0.2, 0.4, 0.5, and 0.6; \(n=500,1000,2000\); MAR with \(\gamma_Y=0.5\); no outcome interaction.
 2. **Varying outcome dependence in missingness:** \(\gamma_Y=0,0.5,0.8\); \(n=500,1000,2000\); target missing share 0.4; MAR; no outcome interaction. Note that \(\gamma_Y=0\) is still MAR because missingness continues to depend on \(X\).
 3. **Outcome interaction under MAR:** \(\gamma_{\mathrm{int}}=0,0.5,1\); \(n=500,1000,2000\); target missing share 0.4; MAR with \(\gamma_Y=0.5\).
 4. **MCAR versus MAR:** MCAR and MAR; \(n=500,1000,2000\); target missing share 0.4; no outcome interaction.
 5. **Outcome interaction under MCAR:** \(\gamma_{\mathrm{int}}=0,0.5,1\); \(n=500,1000,2000\); target missing share 0.4; MCAR.
+6. **Nonlinear covariates with a binary outcome:** estimators use nonlinear transformations of three latent covariates; the outcome model includes a latent covariate interaction with \(\gamma_{\mathrm{int}}=0,0.5,1\); \(n=500,1000,2000\); target missing share 0.4; MAR with \(\gamma_Y=0.5\).
 
 ## Estimators
 
@@ -856,7 +862,13 @@ The intercept is calibrated using 200,000 simulated observations to target 40% m
 
 The estimators excluding TR-AIPW each have separate GLM and RF specifications. For Full-data AIPW and Complete-case AIPW, these specifications change the outcome nuisance model; the treatment propensity model remains a GLM. Full-data AIPW observes the complete exposure but still fits models using transformed covariates, so it is a complete-data benchmark rather than an oracle with correctly specified latent-variable models.
 
-Single-imputation + AIPW uses RF for exposure imputation under both outcome specifications. MICE + AIPW also uses RF exposure imputation, with **10 imputed data sets, 10 iterations and `r mice_rf_trees` trees per imputation forest**. The downstream AIPW outcome model is fitted separately with GLM and RF. MICE pools estimates using Rubin's rules, with normal 95% confidence intervals in this binary implementation.
+Single-imputation + AIPW uses RF for exposure imputation under both outcome specifications. MICE + AIPW also uses RF exposure imputation, with **10 imputed data sets, 10 iterations and `r mice_rf_trees` trees per imputation forest**. The downstream AIPW outcome model is fitted separately with GLM and RF. MICE pools estimates using Rubin's rules. The displayed results use **`r s6_mice_ci_label` 95% confidence intervals** for both outcome specifications. The configured analysis uses Rubin t-based intervals: with \(r=(1+1/m)B/\bar U\), the degrees of freedom are \(\nu=(m-1)(1+1/r)^2\), and the interval is \(\bar Q \pm t_{0.975,\nu}\sqrt{T}\). When between-imputation variance is at most machine precision, \(\nu=\infty\).
+
+```{r s6-mice-interval-note, results='asis'}
+if (s6_mice_ci_method == "normal_1.96") {
+  cat("The loaded Scenario 6 MICE results use normal intervals. Their imputation-level estimates and variances were not saved, so Rubin t-based coverage requires repeating the MICE fits.\n\n")
+}
+```
 
 For `drcmd`, both the outcome learner and the pseudo outcome learner are GLMs in the GLM specification, and both are RFs in the RF specification. The treatment and missingness learners remain GLMs, with `r s6_drcmd_folds`-fold outer cross fitting. AIPW uses a propensity bound of 0.025, and `drcmd` uses a cutoff of 0.025.
 
@@ -865,33 +877,24 @@ TR-AIPW uses a separate **GLM main-effects** analysis using the same simulated b
 ## Result completeness and validity
 
 ```{r s6-read-and-audit, include=FALSE}
-# Use separate objects for the nonlinear binary scenario.
+# Read aggregated results for the nonlinear binary scenario.
 s6_dir <- file.path(results_dir, "nonlinear_binary")
-s6_chunk_files <- c(
-  list.files(file.path(s6_dir, "chunks_mice50"),
-             pattern = "^scenario_.*[.]rds$", full.names = TRUE),
-  list.files(file.path(s6_dir, "chunks_tr_aipw"),
-             pattern = "^scenario_.*[.]rds$", full.names = TRUE)
+s6_path <- file.path(
+  s6_dir,
+  "combined_with_tr_aipw",
+  "all_results.rds"
 )
-s6_read_one <- function(path) {
-  tryCatch(readRDS(path), error = function(e) {
-    stop("Cannot read Scenario 6 result: ", path, "\n", conditionMessage(e))
-  })
+
+if (!file.exists(s6_path)) {
+  stop("Scenario 6 results not found. Run scripts/aggregate.R first.")
 }
-# Use chunks when present: do not mix a merged file with its source rows.
-# A complete merged export is also supported when chunks are not distributed.
-if (length(s6_chunk_files)) {
-  s6_raw <- bind_rows(lapply(s6_chunk_files, s6_read_one))
-} else {
-  s6_merged <- file.path(s6_dir, "combined_with_tr_aipw", "all_results.rds")
-  s6_csv <- file.path(s6_dir, "combined_with_tr_aipw", "all_results.csv")
-  if (file.exists(s6_merged)) {
-    s6_raw <- s6_read_one(s6_merged)
-  } else if (file.exists(s6_csv)) {
-    s6_raw <- read.csv(s6_csv, stringsAsFactors = FALSE)
-  } else {
-    stop("No binary Scenario 6 chunks or combined_with_tr_aipw results in: ", s6_dir)
-  }
+
+s6_raw <- readRDS(s6_path)
+
+if (!"mice_ci_method" %in% names(s6_raw) ||
+    anyNA(s6_raw$mice_ci_method[s6_raw$method == "mice_aipw"]) ||
+    any(s6_raw$mice_ci_method[s6_raw$method == "mice_aipw"] != s6_mice_ci_method)) {
+  stop("Scenario 6 MICE rows have missing or incompatible interval methods.")
 }
 s6_required <- c("scenario_id", "sim", "method", "nuisance_spec", "n",
                  "gamma_int", "true_rd", "estimate", "se", "ci_lower",
@@ -972,7 +975,8 @@ s6_plot <- function(metric, label, refline = NULL) {
     geom_line(linewidth = 0.65) + geom_point(size = 1.5) +
     facet_grid(Specification ~ n) +
     scale_x_continuous(breaks = c(0, 0.5, 1)) +
-    labs(x = expression(gamma[int]), y = label, color = "Estimator") +
+    labs(x = expression(gamma[int]), y = label, color = "Estimator",
+         caption = paste("MICE intervals:", s6_mice_ci_label)) +
     theme_bw(base_size = 10) +
     theme(legend.position = "bottom", panel.grid.minor = element_blank())
   if (!is.null(refline)) p <- p + geom_hline(yintercept = refline,
@@ -1076,8 +1080,7 @@ Complete-case AIPW still has selection bias under MAR. At \(n=1000,\gamma_{\math
 
 Single imputation continues to underestimate uncertainty. At \(n=1000,\gamma_{\mathrm{int}}=1\), its RF bias is `r format_num(s6_metric('single_imp_aipw', 'rf', 1, 'bias'))`, but the SE ratio is `r format_num(s6_metric('single_imp_aipw', 'rf', 1, 'se_ratio'))` and coverage is `r format_num(s6_metric('single_imp_aipw', 'rf', 1, 'coverage'))`. Small point-estimation bias therefore does not imply reliable confidence intervals.
 
-MICE includes between-imputation variability but has positive bias in the stronger interaction settings. At \(n=1000,\gamma_{\mathrm{int}}=1\), changing the outcome nuisance from GLM to RF reduces bias from `r format_num(s6_metric('mice_aipw', 'glm', 1, 'bias'))` to `r format_num(s6_metric('mice_aipw', 'rf', 1, 'bias'))` and RMSE from `r format_num(s6_metric('mice_aipw', 'glm', 1, 'rmse'))` to `r format_num(s6_metric('mice_aipw', 'rf', 1, 'rmse'))`. Coverage remains below nominal: `r format_num(s6_metric('mice_aipw', 'glm', 1, 'coverage'))` and `r format_num(s6_metric('mice_aipw', 'rf', 1, 'coverage'))`, respectively. Any incomplete MICE cell identified above remains temporal.
-
+MICE includes between-imputation variability but has positive bias in the stronger interaction settings. At \(n=1000,\gamma_{\mathrm{int}}=1\), changing the outcome nuisance from GLM to RF reduces bias from `r format_num(s6_metric('mice_aipw', 'glm', 1, 'bias'))` to `r format_num(s6_metric('mice_aipw', 'rf', 1, 'bias'))` and RMSE from `r format_num(s6_metric('mice_aipw', 'glm', 1, 'rmse'))` to `r format_num(s6_metric('mice_aipw', 'rf', 1, 'rmse'))`. Coverage remains below nominal: `r format_num(s6_metric('mice_aipw', 'glm', 1, 'coverage'))` and `r format_num(s6_metric('mice_aipw', 'rf', 1, 'coverage'))`, respectively. 
 For `drcmd` at \(n=1000,\gamma_{\mathrm{int}}=1\), RF reduces bias from `r format_num(s6_metric('drcmd', 'glm', 1, 'bias'))` to `r format_num(s6_metric('drcmd', 'rf', 1, 'bias'))`, but its RMSE is `r format_num(s6_metric('drcmd', 'rf', 1, 'rmse'))` compared with `r format_num(s6_metric('drcmd', 'glm', 1, 'rmse'))` for GLM. A more flexible nuisance model therefore need not provide a simultaneous benefit in bias, efficiency, and coverage.
 
 TR-AIPW conditional coverage across the nine cells ranges from `r paste(format_num(s6_metric_range('tr_aipw', 'glm', 'coverage')), collapse = ' to ')`. At \(n=1000,\gamma_{\mathrm{int}}=1\), its bias is `r format_num(s6_metric('tr_aipw', 'glm', 1, 'bias'))`, RMSE is `r format_num(s6_metric('tr_aipw', 'glm', 1, 'rmse'))`, and coverage is `r format_num(s6_metric('tr_aipw', 'glm', 1, 'coverage'))`. These results support evaluating TR-AIPW alongside the other missing-exposure estimators, while keeping its validity rate and bootstrap failures in the assessment. They do not establish uniformly nominal coverage across all cells.
