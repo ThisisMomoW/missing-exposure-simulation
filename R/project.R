@@ -1,73 +1,27 @@
-# Scripts locate the project from their own path, regardless of the shell's cwd.
 project_root <- function() {
   arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
-  if (length(arg) != 1L) stop("Run this entry point with Rscript.")
+  if (length(arg) != 1L) stop("Run an entry point with Rscript.")
   normalizePath(file.path(dirname(sub("^--file=", "", arg)), ".."), mustWork = TRUE)
 }
 root <- project_root()
-Sys.setenv(RENV_PATHS_LIBRARY=file.path(root,"renv/library"),
-           RENV_CONFIG_SANDBOX_ENABLED="FALSE", RENV_PROJECT=root, RENV_PATHS_CACHE=file.path(root,"renv/cache"),
-           RENV_PATHS_ROOT=file.path(root,"renv/local"), RENV_CONFIG_AUTO_SNAPSHOT="FALSE")
-if (file.exists(file.path(root, "renv/activate.R"))) {
-  source(file.path(root, "renv/activate.R"))
-  renv::load(root, quiet = TRUE)
-} else stop("Run Rscript scripts/setup.R first.")
+Sys.setenv(RENV_PROJECT = root, RENV_PATHS_CACHE = file.path(root, "renv/cache"),
+           RENV_PATHS_ROOT = file.path(root, "renv/local"),
+           RENV_CONFIG_AUTO_SNAPSHOT = "FALSE", RENV_CONFIG_SANDBOX_ENABLED = "FALSE")
+if (!file.exists(file.path(root, "renv/activate.R"))) stop("Run scripts/setup.R first.")
+source(file.path(root, "renv/activate.R"))
+if (!requireNamespace("renv",quietly=TRUE) || !identical(normalizePath(renv::project()),root))
+  stop("The project library was not activated; run scripts/setup.R")
+source(file.path(root, "config/design.R"))
+source(file.path(root, "config/settings.R"))
+source(file.path(root, "R/dgp.R"))
+source(file.path(root, "R/summaries.R"))
 options(stringsAsFactors = FALSE)
-families <- c("missing_share", "gamma_y", "outcome_interaction",
-              "missing_mechanism", "outcome_interaction_mcar", "nonlinear_binary")
-methods <- c("full_aipw", "cc_aipw", "single_imp_aipw", "mice_aipw", "drcmd", "tr_aipw")
-bundled_run <- "bundled"
-bundled_input_dir <- file.path(root,"report/inputs/simulation")
-uses_rf_mice <- function(family, method, spec) {
-  method == "mice_aipw" & spec == "rf" &
-    family %in% c("nonlinear_binary", "outcome_interaction")
-}
-imputation_model <- function(family, method, spec) {
-  ifelse(method %in% c("single_imp_aipw", "mice_aipw"),
-    ifelse(spec == "rf", "rf", "logistic"), NA_character_)
-}
-bundled_settings <- function() {
-  meta <- read.csv(file.path(bundled_input_dir,"metadata.csv"))
-  stopifnot(nrow(meta)==1L,meta$dataset==bundled_run,meta$mice_rf_trees==500L,
-            identical(meta$s6_mice_ci_method,"rubin_t"), meta$s6_drcmd_folds==10L)
-  list(run=bundled_run,mice_rf_trees=as.integer(meta$mice_rf_trees),
-       s6_mice_ci_method=meta$s6_mice_ci_method,
-       s6_drcmd_folds=as.character(meta$s6_drcmd_folds))
-}
-bundled_cells <- function(family) {
-  design <- read.csv(file.path(bundled_input_dir,"design.csv"))
-  design$scenario_id[design$family==family]
-}
-mice_interval_method <- function(family, method, s6_method) {
-  ifelse(method=="mice_aipw",if(family=="nonlinear_binary") s6_method else "rubin_t",NA_character_)
-}
-load_config <- function(family) {
-  stopifnot(family %in% families)
-  e <- new.env(parent = baseenv())
-  sys.source(file.path(root, "config", paste0(family, ".R")), e)
-  e
-}
-arms <- function(family) {
-  if (family == "nonlinear_binary") {
-    return(rbind(expand.grid(method = methods[1:5], nuisance_spec = c("glm", "rf")),
-                 data.frame(method = "tr_aipw", nuisance_spec = "glm")))
-  }
-  x <- expand.grid(method = methods, nuisance_spec = c("main", "interaction"))
-  if (family == "outcome_interaction") x <- rbind(x, data.frame(method = methods[1:5], nuisance_spec = "rf"))
-  x
-}
-code_fingerprint <- function() {
-  paths <- sort(c(list.files(file.path(root, "R"), full.names = TRUE, pattern = "[.]R$"),
-                  list.files(file.path(root, "config"), full.names = TRUE, pattern = "[.]R$"),
-                  file.path(root, "renv.lock")))
-  tmp <- tempfile(); on.exit(unlink(tmp))
-  writeLines(paste(basename(paths), tools::md5sum(paths)), tmp)
-  unname(tools::md5sum(tmp))
-}
-# Atomic publication plus a run manifest prevents partial writes from looking complete.
-atomic_save <- function(x, path) {
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  tmp <- tempfile(".pending_", tmpdir = dirname(path)); on.exit(unlink(tmp))
-  saveRDS(x, tmp, compress = "xz")
-  if (!file.rename(tmp, path)) stop("Cannot publish ", path)
+RNGkind("Mersenne-Twister", "Inversion", "Rejection")
+
+atomic_rds <- function(object, file) {
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  temp <- tempfile(".pending_", tmpdir = dirname(file))
+  on.exit(unlink(temp))
+  saveRDS(object, temp, compress = "xz")
+  if (!file.rename(temp, file)) stop("Could not save ", file)
 }

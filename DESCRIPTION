@@ -1,10 +1,10 @@
-Package: MissingExposureSimulation
-Title: Simulation of Causal Estimators with a Missing Binary Exposure
+Package: MissingExposureStudy
+Title: Simulation of Causal Estimation with Missing Binary Exposures
 Version: 0.1.0
 Authors@R: person("Mo", "Wang", role = c("aut", "cre"))
-Description: Research code for six simulation families evaluating estimators
-    of the marginal causal risk difference with a partly missing binary exposure.
-    Includes simulation runners, performance summaries, figures and a report.
-License: License decision pending
-Imports: AIPW, SuperLearner, drcmd, mice, ranger, rootSolve, doParallel,
-    foreach, dplyr, tidyr, ggplot2, knitr, rmarkdown, ragg
+Description: Simulation designs, estimation, operating characteristics and figures
+    for a study of causal risk differences with partly observed binary exposures.
+Encoding: UTF-8
+Depends: R (>= 4.4.0)
+Imports: AIPW, drcmd, mice, SuperLearner, ranger, ggplot2, digest
+Suggests: renv

@@ -1,0 +1,5 @@
+arg <- sub("^--file=","",grep("^--file=",commandArgs(FALSE),value=TRUE))
+source(file.path(dirname(arg),"../R/project.R"))
+source(file.path(root,"R/workflow.R"))
+load_estimators()
+source(file.path(root,"tests/execution.R"),local=.GlobalEnv)

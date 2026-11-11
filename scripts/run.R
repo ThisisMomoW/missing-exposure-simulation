@@ -1,70 +1,71 @@
-arg0 <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value=TRUE))
-if (!file.exists(file.path(dirname(arg0), "../renv/setup-complete"))) stop("Run Rscript scripts/setup.R first.")
-source(file.path(dirname(arg0), "../R/project.R"))
-source(file.path(root, "R/workflow.R"))
-source(file.path(root, "R/aggregation.R"))
-a <- commandArgs(TRUE)
-if (!length(a) || !a[1] %in% c("scenario", "all")) stop("Usage: run.R scenario FAMILY | all [--cell=N --rep=N[,N...] --method=M --spec=S --run=NAME]")
-opt <- function(key, default=NULL) { z <- a[startsWith(a,paste0("--",key,"="))]; if(length(z)) sub(paste0("^--",key,"="),"",z[1]) else default }
-mode <- a[1]
-selected <- if (mode == "scenario") a[2] else if (!is.null(opt("family"))) opt("family") else families
-stopifnot(all(selected %in% families))
-run_name <- opt("run", "simulation")
-if (!grepl("^[a-zA-Z0-9_-]+$",run_name)) stop("Use a simple run name.")
-if (run_name %in% c(bundled_run,"report")) stop("Choose a simulation run name; bundled is reserved for the included dataset.")
-run_dir <- file.path(root,"outputs",run_name)
-dir.create(run_dir,recursive=TRUE,showWarnings=FALSE)
-fingerprint <- code_fingerprint()
-RNGkind("Mersenne-Twister", "Inversion", "Rejection")
-# Select replication IDs without changing the configured replication count.
-rep_selection <- opt("rep")
-if (!is.null(rep_selection)) {
-  if (!grepl("^[0-9]+(,[0-9]+)*$", rep_selection)) stop("--rep must be an integer or comma-separated integers, e.g. --rep=1,2,3")
-  rep_selection <- as.integer(strsplit(rep_selection, ",", fixed=TRUE)[[1]])
-  if (anyNA(rep_selection) || anyDuplicated(rep_selection)) stop("--rep must contain distinct integer replication IDs")
-}
-for (family in selected) {
-  cfg <- load_implementation(family)
-  grid <- cfg$scenario_grid(); aa <- arms(family)
-  cells <- if (!is.null(opt("cell"))) as.integer(opt("cell")) else if (!is.null(cfg$default_cells)) cfg$default_cells else seq_len(nrow(grid))
-  sims <- if (!is.null(rep_selection)) rep_selection else seq_len(cfg$nsim)
-  stopifnot(all(cells %in% seq_len(nrow(grid))),all(sims %in% seq_len(cfg$nsim)))
-  if(!is.null(opt("method"))) aa<-aa[aa$method==opt("method"),,drop=FALSE]
-  if(!is.null(opt("spec"))) aa<-aa[aa$nuisance_spec==opt("spec"),,drop=FALSE]
-  stopifnot(nrow(aa)>0)
-  family_dir <- file.path(run_dir,family)
-  manifest <- list(family=family,mode=mode,cells=cells,sims=sims,arms=aa,
-    config=as.list(cfg)[!vapply(as.list(cfg),is.function,logical(1))],
-    settings=execution_settings,code_fingerprint=fingerprint,
-    versions=sapply(c("AIPW","SuperLearner","drcmd","mice","ranger"),function(p)as.character(packageVersion(p))))
-  mp<-file.path(family_dir,"manifest.rds")
-  if(file.exists(mp) && !identical(readRDS(mp),manifest)) stop("Existing run has different configuration: ",family_dir,"; choose --run=NAME")
-  atomic_save(manifest,mp)
-  for(sid in cells) {
-    sc<-grid[sid,,drop=FALSE]; constants<-cell_constants(family,sid,sc)
-    for(sim in sims) {
-      dat<-generate_replication(family,sid,sim,sc,constants)
-      for(j in seq_len(nrow(aa))) {
-        method<-as.character(aa$method[j]); spec<-as.character(aa$nuisance_spec[j])
-        path<-file.path(family_dir,sprintf("cell_%03d_rep_%03d_%s_%s.rds",sid,sim,method,spec))
-        if(file.exists(path)) {
-          old<-readRDS(path)
-          stopifnot(identical(old$code_fingerprint,fingerprint),identical(old$settings,execution_settings))
-          if (uses_rf_mice(family,method,spec) &&
-              !identical(old$result$mice_rf_trees,execution_settings$mice_rf_trees)) stop("RF-MICE tree count mismatch: ",path)
-          if (method=="mice_aipw" && !identical(old$result$mice_ci_method,
-              mice_interval_method(family,method,execution_settings$s6_mice_ci_method))) stop("MICE interval method mismatch: ",path)
-          validate_rf_mice_settings(old$result,family,500L)
-          validate_mice_intervals(old$result,family,"rubin_t")
-          next
-        }
-        message(family," cell ",sid," rep ",sim," ",method," / ",spec)
-        rr<-fit_replication(family,sid,sim,method,spec,dat,sc)
-        row<-cbind(data.frame(family=family,scenario_id=sid,sim=sim,method=method,nuisance_spec=spec,
-          estimator=paste(method,spec,sep="__"),true_rd=constants$true_rd,R_intercept=constants$R_intercept),sc,rr)
-        atomic_save(list(result=row,code_fingerprint=fingerprint,settings=execution_settings),path)
-      }
-    }
+arg <- sub("^--file=","",grep("^--file=",commandArgs(FALSE),value=TRUE))
+source(file.path(dirname(arg),"../R/project.R"))
+source(file.path(root,"R/workflow.R"))
+opt <- parse_options(list(run="study",cell="all",method="all",specification="all",predictors="all",reps="1:500",workers="1",
+                          `min-valid-imputations`=study_settings()$min_valid_imputations))
+a <- select_analyses(opt$cell,opt$method,opt$specification,opt$predictors)
+minimum <- validate_imputation_minimum(suppressWarnings(as.numeric(opt[['min-valid-imputations']])))
+if (any(a$method=="multiple_imputation")) {
+  # The predictor comparison uses identical AIPW fold RNG states in each pair.
+  excluded <- a[a$method=="multiple_imputation" & !a$include_y,]
+  for(id in excluded$analysis) {
+    paired_id <- sub("without_y$","with_y",id)
+    if(!paired_id %in% a$analysis) stop("Select both predictor variants for paired MICE folds: --predictors all")
   }
 }
-writeLines(capture.output(sessionInfo()),file.path(run_dir,"session.txt"))
+ids <- integer_range(opt$reps)
+workers <- suppressWarnings(as.integer(opt$workers))
+if (is.na(workers)||workers<1L) stop("workers must be a positive integer")
+if (.Platform$OS.type=="windows"&&workers>1L) stop("Use --workers 1 on Windows")
+folder <- run_directory(opt$run)
+dir.create(folder,recursive=TRUE,showWarnings=FALSE)
+manifest <- list(analyses=a,design=study_design()[study_design()$cell %in% a$cell,],replications=ids,
+                 settings=study_settings(),software=software_versions(),signature=implementation_signature())
+manifest$settings$min_valid_imputations <- minimum
+manifest$signature <- digest::digest(list(manifest$signature,minimum),algo="sha256")
+path <- file.path(folder,"manifest.rds")
+if(file.exists(path)) {
+  if(!identical(readRDS(path),manifest)) stop("This run name has different settings or selection; use a new name")
+} else atomic_rds(manifest,path)
+load_estimators()
+for(cell_id in unique(a$cell)) {
+  cell <- study_design();cell <- cell[cell$cell==cell_id,]
+  prepared <- prepare_cell(cell)
+  atomic_rds(prepared,file.path(folder,"design",paste0(cell_id,".rds")))
+  work <- data.frame(replication=ids)
+  execute <- function(j) {
+    rep <- work$replication[j]
+    aa <- a[a$cell==cell_id,];aa<-aa[order(!aa$include_y),]
+    paired_rng <- NULL
+    for(k in seq_len(nrow(aa))) {
+    analysis <- aa[k,]
+    path <- record_path(folder,analysis$analysis,rep)
+    if(file.exists(path)) {
+      object <- readRDS(path)
+      if(!identical(object$signature,manifest$signature)) stop("Checkpoint configuration differs")
+      if(analysis$method=="multiple_imputation" && analysis$include_y)
+        paired_rng <- object$record$diagnostics[[1]]$component_rng
+      next
+    }
+    # A directory claim prevents two workers from fitting the same replication.
+    claim <- paste0(path,".claim")
+    dir.create(dirname(path),recursive=TRUE,showWarnings=FALSE)
+    if(!dir.create(claim,showWarnings=FALSE)) stop("Replication is claimed by a worker: ",claim)
+    record <- tryCatch({
+      value <- fit_replication(prepared,analysis,rep,
+        paired_rng=if(analysis$include_y)NULL else paired_rng,minimum=minimum)
+      atomic_rds(list(signature=manifest$signature,record=value),path)
+      value
+    },finally=unlink(claim,recursive=TRUE))
+    if(analysis$method=="multiple_imputation" && analysis$include_y)
+      paired_rng <- record$diagnostics[[1]]$component_rng
+    message(cell_id," / ",analysis$method," / ",analysis$specification," / ",rep,": ",record$status)
+    }
+    invisible(NULL)
+  }
+  if(workers==1L) lapply(seq_len(nrow(work)),execute) else {
+    results <- parallel::mclapply(seq_len(nrow(work)),execute,mc.cores=workers,mc.set.seed=FALSE,mc.preschedule=FALSE)
+    if(any(vapply(results,inherits,logical(1),"try-error"))) stop("One or more workers failed outside estimation")
+  }
+}
+message("Run saved in ",folder)

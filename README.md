@@ -1,56 +1,71 @@
-# Missing-exposure simulation
+# Causal inference with missing exposures
 
-Research code for estimating the marginal causal risk difference, E[Y(1) − Y(0)], when a binary exposure is partly missing. A is exposure, Y is the binary outcome, X contains three observed covariates, and R = 1 denotes an observed exposure.
+This study compares estimation of a population average risk difference when a
+binary exposure is partly observed. It includes MCAR, MAR and MNAR mechanisms,
+treatment–covariate interactions, exclusion of the outcome from missing-exposure
+models, and nonlinear covariates with GLM and random-forest analyses.
 
-## Analyses and methods
+The methods are complete-data and complete-case AIPW, single and multiple
+imputation followed by AIPW, and MR (`drcmd`). Estimation uses 10 outer folds.
+MICE uses 10 imputations and 10 iterations; all RF models use 500 trees. The study
+uses 500 fixed attempts per analysis. Equations, model specifications, inference
+and failure handling are in [docs/STUDY.md](docs/STUDY.md).
 
-The six simulation families vary missing exposure share (`missing_share`), outcome dependence in observation (`gamma_y`), treatment–covariate interaction under MAR or MCAR (`outcome_interaction`, `outcome_interaction_mcar`), observation mechanism (`missing_mechanism`), and nonlinear covariates (`nonlinear_binary`). Each method/design cell has **500 replications** at n = 500, 1,000 or 2,000.
+MICE attempts all 10 completed-data fits and retains their results, warnings,
+errors and counts. Rubin pooling uses the actual number of finite estimates
+paired with finite, nonnegative variances. At least 2 valid pairs are required;
+complete and partial successes are distinguished, and fewer than 2 is a failed
+replication. Two is a computational minimum, not a guarantee of adequate
+imputation precision. Override with `--min-valid-imputations N` (2–10).
 
-The manuscript compares complete-data AIPW, complete-case AIPW, single-imputation AIPW, MICE AIPW, and **MR**, implemented by `drcmd::drcmd()` with code identifier `drcmd`. TR-AIPW (`tr_aipw`) is an additional analysis. The nonlinear manuscript cells use η = 1 (cells 7–9); η = 0 and 0.5 (cells 1–6) are available through `--cell` but are not included in the distributed dataset.
-
-In Scenario 6, GLM single imputation uses logistic probabilities followed by Bernoulli draws, and GLM MICE uses `logreg`. The RF branches use RF probabilities for single imputation and MICE `rf` with **500 trees**. Outcome regression follows the GLM/RF branch; treatment propensity uses main-effects logistic regression throughout. MICE uses **10 imputations, 10 iterations and Rubin t intervals**. AIPW and `drcmd` use **10 outer folds**. Scenario 3 RF-MICE also uses 500 trees. [Analysis notes](report/ANALYSIS_NOTES.md) specify internal CV, seeds, bootstrap inference and summary denominators.
-
-## Install and reproduce the figures
-
-Use R 4.4.3 and run these commands from the repository root:
+Use R 4.4.3 and restore the project library:
 
 ```sh
 Rscript scripts/setup.R
-Rscript scripts/aggregate.R bundled
-Rscript scripts/manuscript_figures.R bundled
 ```
 
-Setup restores the project library from `renv.lock`. See [system requirements and package sources](dependencies/ENVIRONMENT.md). The included `report/inputs/simulation/` records support all three manuscript comparisons without fitting models. Outputs in `outputs/bundled/manuscript_figures/` include PDF/PNG figures and the numerical summaries for each figure, with attempted and valid counts. The nonlinear figure uses η = 1, MAR, 40% missing exposure and all three sample sizes.
+The lockfile records CRAN dependencies and the exact `drcmd` GitHub commit.
+Compilation requires an R development toolchain; PDF figures require Cairo support.
+Installed libraries, run checkpoints and scratch outputs are excluded from version
+control. The bundled figure PDFs and numerical CSVs are included in
+`outputs/figures/bundled/`.
 
-For the broader simulation report and its figures:
+The included replication records reproduce the numerical summaries in Figures
+2–5; Figure 1 is a diagram. Generate all figures and their numerical CSVs without
+fitting models:
 
 ```sh
-Rscript scripts/figures.R bundled
-Rscript scripts/render.R html bundled
+Rscript scripts/aggregate.R --run bundled
+Rscript scripts/figures.R --run bundled
 ```
 
-HTML requires Pandoc; replace `html` with `pdf` if LaTeX is installed.
-
-## Run simulations
-
-Run one scenario family, then summarize it:
+A small execution check through the main runner is:
 
 ```sh
-Rscript scripts/run.R scenario nonlinear_binary --run=nonlinear
-Rscript scripts/aggregate.R nonlinear
-Rscript scripts/figures.R nonlinear
+Rscript scripts/run.R --run check --cell nonlinear_1_500 --method complete_data --specification glm --reps 1:3
 ```
 
-A two-replication execution check uses the same model settings; it does not assess statistical performance:
+This checks execution, not statistical performance. Run all methods in one cell
+or the entire grid:
 
 ```sh
-Rscript scripts/run.R scenario nonlinear_binary --cell=7 --rep=1,2 --method=mice_aipw --spec=glm --run=check
+Rscript scripts/run.R --run nonlinear --cell nonlinear_1_500
+Rscript scripts/run.R --run study --workers 4
+Rscript scripts/aggregate.R --run study
+Rscript scripts/figures.R --run study
 ```
 
-`Rscript scripts/run.R all --run=study` runs all six families, using the three manuscript cells for Scenario 6. Seeds depend on cell, method and replication ID. Repeat a command to resume completed checkpoints. Use a new run name when changing the selected grid, code or settings. Aggregation rejects missing or duplicate attempts and incompatible configurations; fitting failures remain recorded attempts.
+Run the same command again to resume missing records. Keep run names distinct
+when changing selections or settings. `--reps` accepts ranges such as `1:3` or
+`1:25,51:75`; omitting it retains 500 attempts. `--method`, `--specification` and
+`--predictors` select analyses listed in `config/design.R`. A Slurm example is in
+`slurm/study.sh`. Focused checks are described in [docs/VALIDATION.md](docs/VALIDATION.md).
 
-## Files and validation
+- `R/`: data generation, estimators, pooling, summaries and plots.
+- `config/`: study cells, analysis selections, numerical settings and seeds.
+- `scripts/`: setup, execution, aggregation, figures and checks.
+- `data/bundled/`: replication records, selection metadata and checksums.
+- `outputs/`: run checkpoints, summary tables, figures and diagnostics.
 
-`R/` contains statistical functions, `config/` defines designs and settings, `scripts/` contains entry points, and `report/` contains the report and included data. `outputs/` holds generated results and is excluded from Git. The included dataset contains 309,000 attempts across 618 method/design cells; [analysis notes](report/ANALYSIS_NOTES.md) describe its scope and limitations.
-
-Run `Rscript scripts/validate.R` for data, pooling and manuscript-summary checks. [Validation](validation/VALIDATION.md) describes focused estimator checks. See [software citations](dependencies/software_citations.txt) and [attribution](NOTICE). A project-wide license has not been selected.
+See [NOTICE](NOTICE) for methodological and software attribution. A repository
+license remains to be selected by the authors.

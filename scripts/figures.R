@@ -1,33 +1,28 @@
-arg0 <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value=TRUE))
-if (!file.exists(file.path(dirname(arg0), "../renv/setup-complete"))) stop("Run Rscript scripts/setup.R first.")
-source(file.path(dirname(arg0), "../R/project.R"))
-a<-commandArgs(TRUE);run<-if(length(a))a[1] else "simulation"
-if(!grepl("^[a-zA-Z0-9_-]+$",run))stop("Invalid run")
-out<-file.path(root,"outputs",run);dir.create(file.path(out,"figures"),recursive=TRUE,showWarnings=FALSE)
-settings_path<-file.path(out,"Results/settings.rds")
-if(!file.exists(settings_path)) stop("Aggregate the named run first")
-settings<-readRDS(settings_path)
-if(length(settings$s6_mice_ci_method)!=1L || !settings$s6_mice_ci_method %in% "rubin_t")
-  stop("Missing or unsupported Scenario 6 MICE interval method; aggregate the named run first")
-if(length(settings$mice_rf_trees)!=1L || !identical(settings$run,run)) stop("Missing or incompatible RF-MICE result settings")
-if(run==bundled_run) {
-  # Knit the actual report chunks to export exactly its figures without fitting.
-  params<-list(project_root=root,results_dir=file.path("outputs",run,"Results"),table_n=1000)
-  knitr::opts_knit$set(root.dir=root)
-  knitr::opts_chunk$set(fig.path=paste0(file.path(out,"figures"),"/"))
-  knitr::knit(file.path(root,"report/report.Rmd"),output=file.path(out,"report.md"),envir=environment(),quiet=TRUE)
-} else {
-  for(family in families) {
-    path<-file.path(out,"tables",paste0(family,".csv"));if(!file.exists(path))next
-    x<-read.csv(path)
-    for(metric in c("bias","rmse","coverage")) {
-      p<-ggplot2::ggplot(x,ggplot2::aes(x=method,y=.data[[metric]],colour=nuisance_spec))+
-        ggplot2::geom_point(position=ggplot2::position_dodge(width=.4))+
-        ggplot2::facet_wrap(~n)+ggplot2::coord_flip()+ggplot2::theme_bw()+
-        ggplot2::labs(subtitle=if(any(uses_rf_mice(family,x$method,x$nuisance_spec)))
-          paste("RF-MICE imputation:",settings$mice_rf_trees,"trees",
-            if(family=="nonlinear_binary") paste("| MICE intervals:",if(settings$s6_mice_ci_method=="rubin_t") "Rubin t" else "Normal (1.96 x SE)") else "") else NULL)
-      ggplot2::ggsave(file.path(out,"figures",paste0(family,"_",metric,".png")),p,width=9,height=5,dpi=140)
-    }
+arg <- sub("^--file=","",grep("^--file=",commandArgs(FALSE),value=TRUE))
+source(file.path(dirname(arg),"../R/project.R"))
+source(file.path(root,"R/workflow.R"))
+source(file.path(root,"R/plots.R"))
+opt <- parse_options(list(run="bundled",figures="1:5"))
+ids <- integer_range(opt$figures,5L)
+folder <- file.path(root,"outputs/figures",opt$run)
+dir.create(folder,recursive=TRUE,showWarnings=FALSE)
+if(1L %in% ids) mechanism_diagram(file.path(folder,"figure_1.pdf"))
+if(any(ids>1L)) {
+  x <- read_run(opt$run)
+  if(length(x$missing)) stop("Complete the selected run before generating performance figures")
+  s <- operating_characteristics(x$records)
+  for(i in ids[ids>1L]) {
+    d <- figure_summaries(s,i)
+    p <- performance_figure(d,i)
+    dim <- figure_dimensions(i)
+    ggplot2::ggsave(file.path(folder,paste0("figure_",i,".pdf")),p$plot,width=dim[1],height=dim[2],device=grDevices::cairo_pdf)
+    utils::write.csv(p$data,file.path(folder,paste0("figure_",i,"_summary.csv")),row.names=FALSE)
+    built <- ggplot2::ggplot_build(p$plot)
+    layer <- which(vapply(p$plot$layers,function(l)inherits(l$geom,"GeomPoint"),logical(1)))
+    points <- built$data[[layer]]
+    stopifnot(nrow(points)==3L*nrow(d))
+    utils::write.csv(points[c("PANEL","group","x","y","colour","shape")],
+      file.path(folder,paste0("figure_",i,"_coordinates.csv")),row.names=FALSE)
   }
 }
+message("Figures saved in ",folder)

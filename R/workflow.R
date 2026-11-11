@@ -1,97 +1,146 @@
-load_implementation <- function(family) {
-  # AIPW discovers custom SuperLearner wrappers in the global environment.
-  for (f in c("dgp_functions", "trme_rd", "estimator_functions"))
-    sys.source(file.path(root, "R", paste0(f, ".R")), .GlobalEnv)
-  cfg <- load_config(family)
-  list2env(as.list(cfg), .GlobalEnv)
-  sys.source(file.path(root, "config/execution.R"), .GlobalEnv)
-  if (family == "outcome_interaction") sys.source(file.path(root, "R/rf_estimators.R"), .GlobalEnv)
-  if (family == "nonlinear_binary") {
-    for (f in c("nonlinear_dgp", "nonlinear_estimators", "nonlinear_tr", "nonlinear_tr_wrapper"))
-      sys.source(file.path(root, "R", paste0(f, ".R")), .GlobalEnv)
-    assign("tr_settings", list(B = 100L, shrink_rate = .99), .GlobalEnv)
-  }
-  # Fail on changed software defaults instead of quietly changing the experiment.
-  stopifnot(formals(AIPW::AIPW$public_methods$initialize)$k_split == 10L,
-            formals(SuperLearner::SL.ranger)$num.trees == 500L,
-            execution_settings$mice_rf_trees == 500L,
-            execution_settings$s6_mice_ci_method == "rubin_t",
-            formals(drcmd::drcmd)$cv_folds == 5L)
-  invisible(cfg)
+load_estimators <- function() {
+  suppressPackageStartupMessages(library(SuperLearner))
+  source(file.path(root,"R/learners.R"),local=.GlobalEnv)
+  source(file.path(root,"R/estimators.R"),local=.GlobalEnv)
 }
-cell_constants <- function(family, sid, sc) {
-  if (family == "nonlinear_binary") {
-    truth <- calculate_truth(sc$gamma_int)
-    alpha <- calibrate_r_intercept(sc$target_missing_share, sc$gamma_int,
-      sc$gamma_y, seed = base_seed + sid * 1000000L + 777L)
-    list(true_rd = truth$true_rd, R_intercept = alpha, truth = truth)
-  } else {
-    alpha <- do.call(calibrate_R_intercept, as.list(sc[c("target_missing_share", "gamma_int", "missing_mechanism", "gamma_y")]))
-    list(true_rd = true_rd(sc$gamma_int), R_intercept = alpha)
-  }
+
+parse_options <- function(defaults) {
+  args <- commandArgs(TRUE)
+  if (length(args)%%2L) stop("Arguments must be --name value pairs")
+  if (!length(args)) return(defaults)
+  keys <- sub("^--","",args[seq(1,length(args),2)])
+  if (anyDuplicated(keys) || any(!keys %in% names(defaults))) stop("Unknown or duplicate option")
+  defaults[keys] <- as.list(args[seq(2,length(args),2)])
+  defaults
 }
-generate_replication <- function(family, sid, sim, sc, constants) {
-  set.seed(base_seed + sid * 100000L + sim)
-  if (family == "nonlinear_binary") {
-    generate_one_dataset(sc$n, sc$gamma_int, sc$gamma_y, constants$R_intercept)
-  } else {
-    dat <- simulate_dataset(sc$n, sc$gamma_int, sc$missing_mechanism, sc$gamma_y, constants$R_intercept)
-    attr(dat, "missing_mechanism") <- as.character(sc$missing_mechanism)
-    dat
-  }
+
+integer_range <- function(x, upper=500L) {
+  parts <- strsplit(x,",",fixed=TRUE)[[1]]
+  ids <- unlist(lapply(parts,function(p) {
+    r <- suppressWarnings(as.integer(strsplit(p,":",fixed=TRUE)[[1]]))
+    if (anyNA(r) || !length(r) || length(r)>2L || any(r<1L | r>upper)) stop("Invalid replication range")
+    if (length(r)==2L) seq.int(r[1],r[2]) else r
+  }))
+  if (anyDuplicated(ids)) stop("Duplicate replication IDs")
+  sort(ids)
 }
-seed_for <- function(family, sid, sim, method, spec) {
-  if (family == "nonlinear_binary" && method == "tr_aipw") {
-    fit <- as.integer(500000000 + sid * 1000000 + sim * 1000)
-    return(c(fit = fit, internal = fit))
+
+select_analyses <- function(cell="all", method="all", specification="all", predictors="all") {
+  a <- study_analyses()
+  if (cell!="all") a <- a[a$cell %in% strsplit(cell,",",fixed=TRUE)[[1]],]
+  if (method!="all") a <- a[a$method %in% strsplit(method,",",fixed=TRUE)[[1]],]
+  if (specification!="all") a <- a[a$specification %in% strsplit(specification,",",fixed=TRUE)[[1]],]
+  if (predictors!="all") {
+    if (!predictors %in% c("with_y","without_y")) stop("Choose with_y, without_y or all")
+    a <- a[a$include_y==(predictors=="with_y"),]
   }
-  mid <- match(method, methods)
-  offset <- 0L
-  if (family == "nonlinear_binary") {
-    mid <- match(method, methods[1:5]) + if (spec == "rf") 5L else 0L
-    offset <- 90000000L
-  } else if (spec == "rf") offset <- 90000000L
-  else if (spec == "interaction") mid <- mid + 6L
-  fit <- base_seed + sid * 100000L + sim + mid * 10000000L + offset
-  c(fit = fit, internal = if (offset == 0L) base_seed + sim else fit)
+  if (!nrow(a)) stop("No analyses match the requested selection")
+  a
 }
-fit_replication <- function(family, sid, sim, method, spec, dat, sc) {
-  seeds <- seed_for(family, sid, sim, method, spec)
-  set.seed(seeds[["fit"]])
-  warnings <- character()
-  rr <- withCallingHandlers(tryCatch({
-    if (family == "nonlinear_binary") {
-      if (method == "tr_aipw") fit_tr_binary(dat, sc, seeds[["internal"]])
-      else fit_one(method, spec, dat, seeds[["internal"]], mice_rf_trees=execution_settings$mice_rf_trees)
-    } else if (spec == "rf") {
-      dd <- make_analysis_data(dat)
-      switch(method,
-        full_aipw = run_aipw_rf_result(dd$full, trim_cutoff),
-        cc_aipw = run_aipw_rf_result(dd$complete_cases, trim_cutoff),
-        single_imp_aipw = run_single_imp_rf_result(dd$missing, trim_cutoff),
-        mice_aipw = run_mice_full_rf_result(dd$missing, mice_m, mice_maxit, seeds[["internal"]], trim_cutoff,
-                                         ntree=execution_settings$mice_rf_trees),
-        drcmd = run_drcmd(dd$missing, trim_cutoff))
-    } else {
-      fit_one_method(method, dat, seed = seeds[["internal"]], mice_m = mice_m,
-        mice_maxit = mice_maxit, nuisance_spec = spec, trim = trim_cutoff,
-        trme_boot_B = trme_boot_B, trme_shrink_rate = 0.99)
+
+software_versions <- function() {
+  packages <- c("AIPW","drcmd","mice","SuperLearner","ranger","ggplot2","digest")
+  sha <- utils::packageDescription("drcmd")$RemoteSha
+  c(R=as.character(getRversion()),setNames(vapply(packages,function(p)as.character(utils::packageVersion(p)),""),packages),
+    drcmd_commit=if(is.null(sha))NA_character_ else sha)
+}
+
+implementation_signature <- function() {
+  paths <- file.path(root,c("R/dgp.R","R/estimators.R","R/learners.R","R/project.R","R/workflow.R",
+                            "config/design.R","config/settings.R"))
+  digest::digest(list(files=setNames(unname(tools::md5sum(paths)),basename(paths)),
+    settings=study_settings(),software=software_versions()),algo="sha256")
+}
+
+prepare_cell <- function(design) {
+  seeds <- design_seeds(design)
+  set.seed(seeds$truth); truth <- population_ate(design)
+  set.seed(seeds$calibration); calibration <- calibrate_observation(design)
+  list(design=design, truth=truth, calibration=calibration, seeds=seeds)
+}
+
+run_directory <- function(name) {
+  if (length(name)!=1L || !grepl("^[A-Za-z][A-Za-z0-9_-]*$",name) || name=="bundled")
+    stop("Choose a run name starting with a letter; bundled is reserved")
+  file.path(root,"outputs/runs",name)
+}
+
+record_path <- function(folder, analysis, replication) file.path(folder,"records",analysis,sprintf("%03d.rds",replication))
+
+valid_estimate <- function(value) length(value)==4L && all(is.finite(value)) &&
+  value["se"]>0 && value["ci_lower"]<=value["ci_upper"]
+
+fit_replication <- function(prepared, analysis, replication, paired_rng=NULL,
+    minimum=study_settings()$min_valid_imputations) {
+  if(analysis$method=="multiple_imputation") minimum <- validate_imputation_minimum(minimum)
+  seeds <- replication_seeds(prepared$design,analysis,replication)
+  set.seed(seeds$data)
+  data <- generate_data(prepared$design,prepared$calibration$intercept)
+  set.seed(seeds$fit)
+  start <- proc.time()[["elapsed"]]
+  captured <- capture_analysis(switch(analysis$method,
+    complete_data=fit_aipw(transform(data,A=A_true),analysis$specification),
+    complete_case=fit_aipw(data[data$R==1L,,drop=FALSE],analysis$specification),
+    single_imputation=fit_single_imputation(data,analysis$specification,analysis$include_y),
+    multiple_imputation={
+      if(!analysis$include_y && is.null(paired_rng)) stop("The paired Y-inclusive MICE analysis did not supply fold RNG states")
+      fit_multiple_imputation(data,analysis$specification,analysis$include_y,seeds$imputation,minimum,paired_rng)
+    },
+    mr=fit_mr(data,analysis$specification,analysis$include_y),stop("Unknown method")))
+  fit <- captured$result
+  value <- if (is.null(fit)) empty_estimate() else fit$value
+  valid <- valid_estimate(value)
+  row <- data.frame(analysis=analysis$analysis,replication=replication,
+    estimate=unname(value["estimate"]),se=unname(value["se"]),
+    ci_lower=unname(value["ci_lower"]),ci_upper=unname(value["ci_upper"]),
+    truth=prepared$truth$ate,valid=valid,status=if(valid)"success" else "failed",
+    data_seed=seeds$data,fit_seed=seeds$fit,
+    imputation_seed=if(analysis$method=="multiple_imputation")seeds$imputation else NA_integer_,
+    observation_intercept=prepared$calibration$intercept,
+    missing_fraction=mean(data$R==0L),elapsed_seconds=proc.time()[["elapsed"]]-start,
+    error=captured$error,mice_requested=if(analysis$method=="multiple_imputation")10L else NA_integer_,
+    mice_valid=NA_integer_,mice_failed=NA_integer_,mice_pooling_status=NA_character_)
+  row$imputation <- if(analysis$method %in% c("single_imputation","multiple_imputation"))
+    if(analysis$specification=="rf")"rf" else "logistic" else NA_character_
+  row$mice_rf_ntree <- if(analysis$method=="multiple_imputation"&&analysis$specification=="rf")500L else NA_integer_
+  row$mice_ubar <- row$mice_between <- row$mice_total <- row$mice_df <- NA_real_
+  row$warnings <- I(list(captured$warnings))
+  row$diagnostics <- I(list(if(is.null(fit))list() else fit$diagnostics))
+  row$mice_q <- I(list(NULL));row$mice_u <- I(list(NULL));row$mice_components <- I(list(NULL))
+  if(analysis$method=="multiple_imputation" && !is.null(fit)) {
+    d <- fit$diagnostics
+    row$mice_requested <- d$mice_requested;row$mice_valid <- d$mice_valid;row$mice_failed <- d$mice_failed
+    row$mice_pooling_status <- d$mice_pooling_status
+    row$mice_q <- I(list(d$mice_q));row$mice_u <- I(list(d$mice_u))
+    row$mice_components <- I(list(d$component_fits))
+    if(!is.null(d$pooling)) {
+      row$mice_ubar <- d$pooling$ubar;row$mice_between <- d$pooling$between
+      row$mice_total <- d$pooling$total;row$mice_df <- d$pooling$df
     }
-  }, error = function(e) data.frame(estimate=NA_real_, se=NA_real_, ci_lower=NA_real_, ci_upper=NA_real_, status="failed", error=conditionMessage(e))),
-  warning = function(w) { warnings <<- c(warnings, conditionMessage(w)); invokeRestart("muffleWarning") })
-  valid <- all(is.finite(unlist(rr[c("estimate", "se", "ci_lower", "ci_upper")]))) && rr$se >= 0 && rr$ci_lower <= rr$ci_upper
-  if (!"status" %in% names(rr)) rr$status <- if (valid) "ok" else "failed"
-  if (!"error" %in% names(rr)) rr$error <- if (valid) NA_character_ else paste(unique(warnings), collapse=" | ")
-  rr$warnings <- paste(unique(warnings), collapse=" | ")
-  rr$data_seed <- base_seed + sid * 100000L + sim
-  rr$fit_seed <- seeds[["fit"]]; rr$internal_seed <- seeds[["internal"]]
-  rr$drcmd_k <- if (method == "drcmd") 10L else NA_integer_
-  rr$mice_rf_trees <- if (uses_rf_mice(family,method,spec)) execution_settings$mice_rf_trees else NA_integer_
-  rr$imputation <- imputation_model(family,method,spec)
-  rr$mice_method <- if (method=="mice_aipw") if (spec=="rf") "rf" else "logreg" else NA_character_
-  rr$mice_m <- if (method=="mice_aipw") mice_m else NA_integer_
-  rr$mice_maxit <- if (method=="mice_aipw") mice_maxit else NA_integer_
-  rr$mice_ci_method <- if (method != "mice_aipw") NA_character_ else
-    if (family == "nonlinear_binary") execution_settings$s6_mice_ci_method else "rubin_t"
-  rr
+    if(!valid)row$error <- if(!is.null(d$imputation_error))d$imputation_error else d$pooling_error
+  }
+  row
+}
+
+read_run <- function(name) {
+  if (name=="bundled") {
+    folder <- file.path(root,"data/bundled")
+    manifest <- readRDS(file.path(folder,"manifest.rds"))
+    checks <- utils::read.csv(file.path(folder,"checksums.csv"))
+    if(!identical(unname(tools::md5sum(file.path(folder,checks$file))),checks$md5)) stop("Bundled input checksum differs")
+    records <- readRDS(file.path(folder,"replications.rds"))
+  } else {
+    folder <- run_directory(name)
+    manifest <- readRDS(file.path(folder,"manifest.rds"))
+    files <- list.files(file.path(folder,"records"),pattern="[.]rds$",recursive=TRUE,full.names=TRUE)
+    if (!length(files)) stop("No replication records")
+    objects <- lapply(files,readRDS)
+    if (!all(vapply(objects,function(z)identical(z$signature,manifest$signature),logical(1))))
+      stop("Incompatible configuration or software in replication records")
+    records <- do.call(rbind,lapply(objects,`[[`,"record"))
+  }
+  keys <- paste(records$analysis,records$replication)
+  expected <- as.vector(outer(manifest$analyses$analysis,manifest$replications,paste))
+  if (anyDuplicated(keys) || any(!keys %in% expected)) stop("Duplicate or unexpected replication key")
+  list(records=records,manifest=manifest,missing=setdiff(expected,keys))
 }

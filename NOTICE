@@ -1,9 +1,32 @@
-Project and report author: Mo Wang.
+Project author: Mo Wang.
 
-R/trme_rd.R adapts Yuliang Shi's trme estimating equations to the marginal risk-difference scale. The implementation includes bootstrap validity checks and inverse-weight shrinkage. Yuliang Shi's authorship and methodological references are credited in that file.
+Statistical methods and software
 
-Upstream trme: https://github.com/yuliang-shi/trme, licensed under GPL-3.0. The corresponding license text is included in dependencies/GPL-3.txt. The exact upstream revision for this adaptation is not established; its redistribution obligations require review.
+Bang and Robins (2005). Doubly robust estimation in missing data and causal
+inference models. Biometrics 61:962–973.
 
-External packages are dependencies, not bundled package code. Their licenses and versions appear in renv.lock. Software citations are provided in dependencies/software_citations.txt.
+Rubin (1987). Multiple Imputation for Nonresponse in Surveys. Wiley.
 
-A project-wide license for Mo Wang's code has not been selected. The author must choose a license compatible with the TR code before granting public reuse rights. This notice does not grant additional rights or change existing licenses.
+Kang and Schafer (2007). Demystifying double robustness: A comparison of
+alternative strategies for estimating a population mean from incomplete data.
+Statistical Science 22:523–539.
+
+Levis, Mukherjee, Wang, Fischer and Haneuse (2024). Double sampling for
+informatively missing data in electronic health record-based comparative
+effectiveness research. Statistics in Medicine 43:6086–6098.
+
+Shi, Zhu and Dubin (2024). Causal inference on missing exposure via robust
+estimation. arXiv:2406.08668.
+
+Zhong, Kennedy, Bodnar and Naimi (2021). AIPW: An R package for augmented
+inverse probability-weighted estimation of average causal effects.
+American Journal of Epidemiology 190:2690–2699.
+
+Van Buuren and Groothuis-Oudshoorn (2011). mice: Multivariate imputation by
+chained equations in R. Journal of Statistical Software 45:1–67.
+
+Barnatchez and DesRoches. drcmd: Doubly-Robust Causal Inference with Missing
+Data. https://github.com/keithbarnatchez/drcmd
+
+Third-party packages retain their authorship and individual licenses.
+A project-wide license has not been selected.
