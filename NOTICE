@@ -2,31 +2,20 @@ Project author: Mo Wang.
 
 Statistical methods and software
 
-Bang and Robins (2005). Doubly robust estimation in missing data and causal
-inference models. Biometrics 61:962–973.
+Bang and Robins (2005). Doubly robust estimation in missing data and causal inference models. Biometrics 61:962–973.
 
 Rubin (1987). Multiple Imputation for Nonresponse in Surveys. Wiley.
 
-Kang and Schafer (2007). Demystifying double robustness: A comparison of
-alternative strategies for estimating a population mean from incomplete data.
-Statistical Science 22:523–539.
+Kang and Schafer (2007). Demystifying double robustness: A comparison of alternative strategies for estimating a population mean from incomplete data. Statistical Science 22:523–539.
 
-Levis, Mukherjee, Wang, Fischer and Haneuse (2024). Double sampling for
-informatively missing data in electronic health record-based comparative
-effectiveness research. Statistics in Medicine 43:6086–6098.
+Levis, Mukherjee, Wang, Fischer and Haneuse (2024). Double sampling for informatively missing data in electronic health record-based comparative effectiveness research. Statistics in Medicine 43:6086–6098.
 
-Shi, Zhu and Dubin (2024). Causal inference on missing exposure via robust
-estimation. arXiv:2406.08668.
+Shi, Zhu and Dubin (2024). Causal inference on missing exposure via robust estimation. arXiv:2406.08668.
 
-Zhong, Kennedy, Bodnar and Naimi (2021). AIPW: An R package for augmented
-inverse probability-weighted estimation of average causal effects.
-American Journal of Epidemiology 190:2690–2699.
+Zhong, Kennedy, Bodnar and Naimi (2021). AIPW: An R package for augmented inverse probability-weighted estimation of average causal effects. American Journal of Epidemiology 190:2690–2699.
 
-Van Buuren and Groothuis-Oudshoorn (2011). mice: Multivariate imputation by
-chained equations in R. Journal of Statistical Software 45:1–67.
+Van Buuren and Groothuis-Oudshoorn (2011). mice: Multivariate imputation by chained equations in R. Journal of Statistical Software 45:1–67.
 
-Barnatchez and DesRoches. drcmd: Doubly-Robust Causal Inference with Missing
-Data. https://github.com/keithbarnatchez/drcmd
+Barnatchez and DesRoches. drcmd: Doubly-Robust Causal Inference with Missing Data. https://github.com/keithbarnatchez/drcmd
 
-Third-party packages retain their authorship and individual licenses.
-A project-wide license has not been selected.
+Third-party packages retain their authorship and individual licenses. A project-wide license has not been selected.

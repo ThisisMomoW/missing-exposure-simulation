@@ -2,8 +2,7 @@ Package: MissingExposureStudy
 Title: Simulation of Causal Estimation with Missing Binary Exposures
 Version: 0.1.0
 Authors@R: person("Mo", "Wang", role = c("aut", "cre"))
-Description: Simulation designs, estimation, operating characteristics and figures
-    for a study of causal risk differences with partly observed binary exposures.
+Description: Simulation designs, estimation, operating characteristics and figures for a study of causal risk differences with partly observed binary exposures.
 Encoding: UTF-8
 Depends: R (>= 4.4.0)
 Imports: AIPW, drcmd, mice, SuperLearner, ranger, ggplot2, digest
